@@ -6,9 +6,7 @@ set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-if (NOT WIN32)
-    message(FATAL_ERROR "This project currently targets Windows + Npcap only.")
-endif()
+if (WIN32)
 
 # Npcap SDK (headers + import libs) is separate from the Npcap runtime driver.
 # 1. Install the Npcap runtime: https://npcap.com/#download -> "Npcap installer"
@@ -35,13 +33,27 @@ else()
     set(NPCAP_LIB_DIR "${NPCAP_SDK_DIR}/Lib")
 endif()
 
+# raw_socket.c/.h implement an AF_PACKET-based capture path for Linux/WSL and
+# are not part of this Windows+Npcap target (they won't compile with MSVC's
+# Windows headers); see the UNIX branch below for their build target.
 add_executable(my_wireshark
     src/main.cpp
     src/c/capture.c
     src/c/capture.h
-)
+    src/c/eth_parser.c
+    src/c/eth_parser.h
+    src/c/ip_parser.c
+    src/c/ip_parser.h
+    src/c/tcp_udp_parser.c
+    src/c/tcp_udp_parser.h)
 
-set_source_files_properties(src/c/capture.c PROPERTIES LANGUAGE C)
+set_source_files_properties(
+    src/c/capture.c
+    src/c/eth_parser.c
+    src/c/ip_parser.c
+    src/c/tcp_udp_parser.c
+    PROPERTIES LANGUAGE C
+)
 
 target_include_directories(my_wireshark PRIVATE
     src
@@ -50,3 +62,25 @@ target_include_directories(my_wireshark PRIVATE
 
 target_link_directories(my_wireshark PRIVATE "${NPCAP_LIB_DIR}")
 target_link_libraries(my_wireshark PRIVATE wpcap Packet ws2_32)
+
+target_compile_options(my_wireshark PRIVATE
+    $<$<C_COMPILER_ID:MSVC>:/W4>
+    $<$<CXX_COMPILER_ID:MSVC>:/W4>
+    $<$<AND:$<COMPILE_LANGUAGE:C>,$<NOT:$<C_COMPILER_ID:MSVC>>>:-Wall -Wextra>
+    $<$<AND:$<COMPILE_LANGUAGE:CXX>,$<NOT:$<CXX_COMPILER_ID:MSVC>>>:-Wall -Wextra>
+)
+
+elseif (UNIX)
+
+# AF_PACKET-based capture path for Linux/WSL, built separately from the
+# Windows+Npcap target above so it gets a real compile command (and thus
+# working IntelliSense) under the Linux-GCC-Debug configuration.
+add_executable(raw_socket_test
+    src/c/raw_socket.c
+    src/c/raw_socket.h)
+
+target_include_directories(raw_socket_test PRIVATE src)
+
+target_compile_options(raw_socket_test PRIVATE -Wall -Wextra)
+
+endif()
