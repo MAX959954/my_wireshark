@@ -38,6 +38,8 @@ endif()
 # Windows headers); see the UNIX branch below for their build target.
 add_executable(my_wireshark
     src/main.cpp
+    src/cpp/packet.cpp
+    src/cpp/packet.h
     src/c/capture.c
     src/c/capture.h
     src/c/eth_parser.c
