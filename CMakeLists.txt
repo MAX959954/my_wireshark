@@ -40,6 +40,10 @@ add_executable(my_wireshark
     src/main.cpp
     src/cpp/packet.cpp
     src/cpp/packet.h
+    src/cpp/tcp_packet.cpp
+    src/cpp/tcp_packet.h
+    src/cpp/udp_packet.cpp
+    src/cpp/udp_packet.h
     src/c/capture.c
     src/c/capture.h
     src/c/eth_parser.c
