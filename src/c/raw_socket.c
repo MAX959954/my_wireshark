@@ -74,7 +74,7 @@ raw_socket_ctx_t* raw_socket_open(const char* device_name) {
 
 	if (setsockopt(fd, SOL_SOCKET, SO_BINDTODEVICE, device_name,
 		(socklen_t)(strlen(device_name) + 1)) == -1) {
-		perror("setsockopt(SO_BINDTODEVICE");
+		perror("setsockopt(SO_BINDTODEVICE)");
 		close(fd);
 		return NULL;
 	}
@@ -98,7 +98,7 @@ raw_socket_ctx_t* raw_socket_open(const char* device_name) {
 
 	struct timeval tv;
 	tv.tv_sec = 0;
-	tv.tv_usec = 200000; /* 200��, ����� raw_socket_recv ������� stop_requested */
+	tv.tv_usec = 200000; /* 200ms, chtoby raw_socket_recv zametil stop_requested */
 	if (setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv)) == -1) {
 		perror("setsockopt(SO_RCVTIMEO)");
 		close(fd);

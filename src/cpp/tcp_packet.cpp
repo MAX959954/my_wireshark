@@ -1,7 +1,7 @@
 #include "tcp_packet.h"
 
 namespace {
-	void print_flags(uint8_t  flags , std :: ofstream & os) {
+	void print_flags(uint8_t flags, std::ostream& os) {
 		if (flags & TCP_FLAG_SYN) os << "SYN";
 		if (flags & TCP_FLAG_FIN) os << "FIN";
 		if (flags & TCP_FLAG_PSH) os << "PSH";
@@ -11,18 +11,16 @@ namespace {
 	}
 }
 
-TCPPacket::TCPPacket(uint32_t ts_seconds, uint32_t ts_microsecods, uint32_t capture_length,
-	const eth_header_t& eth, const ip_header_t& ip, const tcp_header_t& tcp):
-	Packet (ts_seconds , ts_microsecods , capture_length , eth , ip) , tcp_(tcp)
-{
-	
+TCPPacket::TCPPacket(uint32_t ts_seconds, uint32_t ts_microseconds, uint32_t capture_length,
+	const eth_header_t& eth, const ip_header_t& ip, const tcp_header_t& tcp)
+	: Packet(ts_seconds, ts_microseconds, capture_length, eth, ip), tcp_(tcp) {
 }
 
-void TCPPacket::print(std ::ofstream & os)const  {
+void TCPPacket::print(std::ostream& os) const {
 	Packet::print(os);
 	os << " " << tcp_.src_port << " > " << tcp_.dst_port
-		<< " seq= " << tcp_.seq_num << " ack = " << tcp_.ack_num
-		<< " flags=[";
+	   << " seq=" << tcp_.seq_num << " ack=" << tcp_.ack_num
+	   << " flags=[";
 	print_flags(tcp_.flags, os);
-	os << "]"
+	os << "]";
 }
