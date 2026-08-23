@@ -20,8 +20,8 @@ extern "C" {
     typedef struct {
         uint16_t hardware_type;
         uint16_t protocol_type;
-        uint8_t  hardware_addr_le
-            uint8_t  protocol_addr_len;
+        uint8_t  hardware_addr_len;
+        uint8_t  protocol_addr_len;
         uint16_t opcode;
         uint8_t  sender_mac[6];
         uint8_t  sender_ip[4];
@@ -29,9 +29,9 @@ extern "C" {
         uint8_t  target_ip[4];
     } arp_header_t;
 
-    int arp_parse(const uint16_t* data, uint32_t length, arp_header_t* out_header);
+    int arp_parse(const uint8_t* data, uint32_t length, arp_header_t* out_header);
 
-#ifndef __cplusplus
+#ifdef __cplusplus
 }
-#endif // !__cplusplus
+#endif
 #endif

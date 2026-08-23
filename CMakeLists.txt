@@ -50,6 +50,10 @@ add_executable(my_wireshark
     src/c/eth_parser.h
     src/c/ip_parser.c
     src/c/ip_parser.h
+    src/c/ipv6_parser.c
+    src/c/ipv6_parser.h
+    src/c/arp_parser.c
+    src/c/arp_parser.h
     src/c/tcp_udp_parser.c
     src/c/tcp_udp_parser.h)
 
@@ -57,6 +61,8 @@ set_source_files_properties(
     src/c/capture.c
     src/c/eth_parser.c
     src/c/ip_parser.c
+    src/c/ipv6_parser.c
+    src/c/arp_parser.c
     src/c/tcp_udp_parser.c
     PROPERTIES LANGUAGE C
 )
