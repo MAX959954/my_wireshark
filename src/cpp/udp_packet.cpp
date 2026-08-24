@@ -9,4 +9,7 @@ void UDPPacket::print(std::ostream& os) const {
 	Packet::print(os);
 	os << " " << udp_.src_port << " > " << udp_.dst_port
 	   << " len=" << udp_.length;
+	if (udp_.checksum_present && !udp_.checksum_valid) {
+		os << " udp_csum=BAD";
+	}
 }

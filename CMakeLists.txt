@@ -46,6 +46,8 @@ add_executable(my_wireshark
     src/cpp/udp_packet.h
     src/c/capture.c
     src/c/capture.h
+    src/c/checksum.c
+    src/c/checksum.h
     src/c/eth_parser.c
     src/c/eth_parser.h
     src/c/ip_parser.c
@@ -59,6 +61,7 @@ add_executable(my_wireshark
 
 set_source_files_properties(
     src/c/capture.c
+    src/c/checksum.c
     src/c/eth_parser.c
     src/c/ip_parser.c
     src/c/ipv6_parser.c

@@ -9,6 +9,7 @@ extern "C" {
 
 #define ETH_ADDR_LEN 6
 #define ETH_HEADER_LEN 14
+#define ETH_VLAN_TAG_LEN 4
 
 // ether types
 #define ETH_TYPE_IPV4 0x0800
@@ -20,7 +21,12 @@ typedef struct {
     uint8_t dst_mac[ETH_ADDR_LEN];
     uint8_t src_mac[ETH_ADDR_LEN];
     uint16_t ether_type;
+    uint8_t has_vlan;
+    uint16_t vlan_tci;
 } eth_header_t;
+
+#define ETH_VLAN_ID(tci) ((tci) & 0x0FFF)
+#define ETH_VLAN_PCP(tci) ((uint8_t)((tci) >> 13))
 
 /*
 анализирует исходный кадр Ethernet II, начинающийся с 'data'.

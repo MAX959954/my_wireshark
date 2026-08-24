@@ -27,6 +27,7 @@ typedef struct {
     uint16_t checksum;
     uint8_t src_addr[IP_ADDR_LEN];
     uint8_t dst_addr[IP_ADDR_LEN];
+    uint8_t checksum_valid; /* 1, если чек-сумма заголовка верна, иначе 0 */
 } ip_header_t;
 
 /*

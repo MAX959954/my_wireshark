@@ -11,14 +11,32 @@ int eth_parse(const uint8_t* data, uint32_t length, eth_header_t* out_header,
 
     memcpy(out_header->dst_mac, data, ETH_ADDR_LEN);
     memcpy(out_header->src_mac, data + ETH_ADDR_LEN, ETH_ADDR_LEN);
-    out_header->ether_type = (uint16_t)((data[12] << 8) | data[13]);
+
+    uint16_t type_or_tpid = (uint16_t)((data[12] << 8 ) | data[13]);
+    uint32_t header_len = ETH_HEADER_LEN;
+
+    if (type_or_tpid == ETH_TYPE_VLAN) {
+        if (length < ETH_HEADER_LEN + ETH_VLAN_TAG_LEN) {
+            return -1;
+        }
+
+        out_header->has_vlan = 1;
+        out_header->vlan_tci = (uint16_t)((data[14] << 8) | data[15]);
+        out_header->ether_type = (uint16_t)((data[16] << 8) | data[17]);
+        header_len += ETH_VLAN_TAG_LEN;
+    }
+    else {
+        out_header->has_vlan = 0;
+        out_header->vlan_tci = 0;
+        out_header->ether_type = type_or_tpid;
+    }
 
     if (out_payload != NULL) {
-        *out_payload = data + ETH_HEADER_LEN;
+        *out_payload = data + header_len;
     }
 
     if (out_payload_len != NULL) {
-        *out_payload_len = length - ETH_HEADER_LEN;
+        *out_payload_len = length - header_len;
     }
 
     return 0;

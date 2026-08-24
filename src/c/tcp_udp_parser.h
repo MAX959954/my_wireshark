@@ -27,6 +27,7 @@ typedef struct {
     uint16_t window_size;
     uint16_t checksum;
     uint16_t urgent_pointer;
+    uint8_t checksum_valid; /* заполняется вызовом tcp_verify_checksum(), не tcp_parse() */
 } tcp_header_t;
 
 typedef struct {
@@ -34,6 +35,8 @@ typedef struct {
     uint16_t dst_port;
     uint16_t length;
     uint16_t checksum;
+    uint8_t checksum_present; /* 0, если checksum == 0 — отправитель не стал её считать (RFC 768) */
+    uint8_t checksum_valid;   /* заполняется вызовом udp_verify_checksum(), не udp_parse() */
 } udp_header_t;
 
 /*
@@ -54,6 +57,24 @@ int tcp_parse(const uint8_t* data, uint32_t length, tcp_header_t* out_header,
 */
 int udp_parse(const uint8_t* data, uint32_t length, udp_header_t* out_header,
     const uint8_t** out_payload, uint32_t* out_payload_len);
+
+/*
+проверяет контрольную сумму TCP-сегмента (заголовок + payload) 'segment'
+длиной 'segment_len' с учётом IPv4 pseudo-header, построенного из 'src_ip' и
+'dst_ip'. Возвращает 1, если чек-сумма верна, иначе 0.
+*/
+int tcp_verify_checksum(const uint8_t* segment, uint32_t segment_len,
+    const uint8_t src_ip[4], const uint8_t dst_ip[4]);
+
+/*
+проверяет контрольную сумму UDP-сегмента аналогично tcp_verify_checksum().
+Если поле checksum внутри 'segment' равно 0 (допустимо для UDP/IPv4 по
+RFC 768 — отправитель не стал её считать), возвращает 1, так как проверять
+нечего; чтобы отличить этот случай от реально совпавшей чек-суммы,
+смотрите udp_header_t.checksum_present, заполняемое udp_parse().
+*/
+int udp_verify_checksum(const uint8_t* segment, uint32_t segment_len,
+    const uint8_t src_ip[4], const uint8_t dst_ip[4]);
 
 #ifdef __cplusplus
 }

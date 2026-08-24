@@ -1,4 +1,5 @@
 #include "ip_parser.h"
+#include "checksum.h"
 #include <stddef.h>
 #include <stdio.h>
 
@@ -16,6 +17,8 @@ int ip_parse(const uint8_t* data, uint32_t length, ip_header_t* out_header,
     if (version != 4 || ihl < 5 || header_len > length) {
         return -1;
     }
+
+    out_header->checksum_valid = (uint8_t)checksum_verify(data, header_len);
 
     out_header->version = version;
     out_header->ihl = ihl;
@@ -46,7 +49,21 @@ int ip_parse(const uint8_t* data, uint32_t length, ip_header_t* out_header,
     }
 
     if (out_payload_len != NULL) {
-        *out_payload_len = length - header_len;
+        uint32_t available_payload_len = length - header_len;
+
+        /* total_length is the authoritative datagram size; anything beyond it
+           within the captured frame is L2 padding/trailer (common on short
+           packets, e.g. bare TCP ACKs), not part of the IP payload. Only trust
+           it when it doesn't exceed what was actually captured — otherwise the
+           capture is truncated and available_payload_len is what we've got. */
+        if (out_header->total_length >= header_len) {
+            uint32_t declared_payload_len = out_header->total_length - header_len;
+            if (declared_payload_len < available_payload_len) {
+                available_payload_len = declared_payload_len;
+            }
+        }
+
+        *out_payload_len = available_payload_len;
     }
 
     return 0;
