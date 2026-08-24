@@ -44,6 +44,8 @@ namespace {
 			case IP_PROTO_TCP: {
 				tcp_header_t tcp;
 				if (tcp_parse(ip_paylaod , ip_payload_len , &tcp , nullptr , nullptr )== 0) {
+					tcp.checksum_valid = (uint8_t)tcp_verify_checksum(ip_paylaod, ip_payload_len,
+						ip.src_addr, ip.dst_addr);
 					TCPPacket pkt(ts_seconds, ts_microseconds, length, eth, ip, tcp);
 					pkt.print(std::cout);
 				}
@@ -57,6 +59,8 @@ namespace {
 			case IP_PROTO_UDP: {
 				udp_header_t udp;
 				if (udp_parse(ip_paylaod, ip_payload_len, &udp, nullptr, nullptr) == 0) {
+					udp.checksum_valid = (uint8_t)udp_verify_checksum(ip_paylaod, ip_payload_len,
+						ip.src_addr, ip.dst_addr);
 					UDPPacket pkt(ts_seconds, ts_microseconds, length, eth, ip, udp);
 					pkt.print(std::cout);
 				}

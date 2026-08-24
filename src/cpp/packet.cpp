@@ -16,8 +16,13 @@ void Packet::print(std::ostream& os) const {
 
     os << ts_seconds_ << "." << std::setw(6) << std::setfill('0') << ts_microseconds_
        << " len=" << capture_length_
-       << " " << src_mac << " > " << dst_mac
-       << " [" << protocol_name() << "]";
+       << " " << src_mac << " > " << dst_mac;
+
+    if (eth_.has_vlan) {
+        os << " vlan=" << ETH_VLAN_ID(eth_.vlan_tci);
+    }
+
+    os << " [" << protocol_name() << "]";
 
     if (has_ip()) {
         char src_ip[IP_ADDR_STR_LEN];
@@ -25,5 +30,8 @@ void Packet::print(std::ostream& os) const {
         ip_addr_to_str(ip_->src_addr, src_ip);
         ip_addr_to_str(ip_->dst_addr, dst_ip);
         os << " " << src_ip << " > " << dst_ip << " ttl=" << static_cast<int>(ip_->ttl);
+        if (!ip_->checksum_valid) {
+            os << " ip_csum=BAD";
+        }
     }
 }

@@ -23,4 +23,7 @@ void TCPPacket::print(std::ostream& os) const {
 	   << " flags=[";
 	print_flags(tcp_.flags, os);
 	os << "]";
+	if (!tcp_.checksum_valid) {
+		os << " tcp_csum=BAD";
+	}
 }

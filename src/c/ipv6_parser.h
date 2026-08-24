@@ -20,7 +20,7 @@ extern "C" {
         uint8_t  src_addr[IPV6_ADDR_LEN];
         uint8_t  dst_addr[IPV6_ADDR_LEN];
     } ipv6_header_t;
-
+     
     /*
     анализирует сырой пакет IPv6, начинающийся с 'data'. При успешном заполнении
     'out_header', указывает 'out_payload' на байт прямо после (фиксированного
