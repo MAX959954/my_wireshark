@@ -1,8 +1,27 @@
 #include "capture.h"
 
 #include <pcap.h>
+#include <signal.h>
 #include <stdio.h>
 #include <string.h>
+
+/* handle of the pcap_loop() currently blocked in capture_run(), or NULL when
+   no capture is running; set/cleared by capture_run() itself. The SIGINT
+   handler (and capture_request_stop(), which it calls) only ever read it, so
+   a plain volatile pointer is enough here - there's no concurrent writer. */
+static pcap_t* volatile g_active_handle = NULL;
+
+void capture_request_stop(void) {
+    pcap_t* handle = g_active_handle;
+    if (handle != NULL) {
+        pcap_breakloop(handle);
+    }
+}
+
+static void on_sigint(int signum) {
+    (void)signum;
+    capture_request_stop();
+}
 
 int capture_list_device(capture_device_t* output, int max_device) {
     pcap_if_t* alldevs;
@@ -53,9 +72,17 @@ int capture_run(const char* device_name, capture_packet_cb cb, void* user_data) 
         return -1;
     }
 
+    g_active_handle = handle;
+    void (*previous_sigint_handler)(int) = signal(SIGINT, on_sigint);
+
     struct capture_ctx ctx = { cb, user_data };
     int result = pcap_loop(handle, -1, dispatch_trampoline, (u_char*)&ctx);
 
+    signal(SIGINT, previous_sigint_handler);
+    g_active_handle = NULL;
+
     pcap_close(handle);
+    /* PCAP_ERROR_BREAK (-2) means pcap_breakloop() stopped us on purpose -
+       that's the clean-stop path this function documents, not a failure. */
     return (result == -1) ? -1 : 0;
 }
