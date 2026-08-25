@@ -1,0 +1,12 @@
+function(add_parser_test name)
+    add_executable(${name} ${name}.c)
+    target_link_libraries(${name} PRIVATE wireshark_parsers)
+    add_test(NAME ${name} COMMAND ${name})
+endfunction()
+
+add_parser_test(test_eth_parser)
+add_parser_test(test_arp_parser)
+add_parser_test(test_ip_parser)
+add_parser_test(test_ipv6_parser)
+add_parser_test(test_tcp_udp_parser)
+add_parser_test(test_checksum)
