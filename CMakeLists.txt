@@ -13,6 +13,28 @@ if (NOT UNIX)
         "(linux/if_packet.h etc). Windows/Npcap support has been removed.")
 endif()
 
+# Protocol parsers as a separate static library: pure, dependency-free C that
+# both my_wireshark and the unit tests under src/tests/ link against, so the
+# parser sources aren't compiled twice and tests exercise the exact same
+# object code as the real binary.
+add_library(wireshark_parsers STATIC
+    src/c/checksum.c
+    src/c/checksum.h
+    src/c/eth_parser.c
+    src/c/eth_parser.h
+    src/c/ip_parser.c
+    src/c/ip_parser.h
+    src/c/ipv6_parser.c
+    src/c/ipv6_parser.h
+    src/c/arp_parser.c
+    src/c/arp_parser.h
+    src/c/tcp_udp_parser.c
+    src/c/tcp_udp_parser.h)
+
+target_include_directories(wireshark_parsers PUBLIC src)
+
+target_compile_options(wireshark_parsers PRIVATE -Wall -Wextra)
+
 # AF_PACKET-based capture (src/c/raw_socket.c, wrapped behind the
 # capture_backend_t interface in src/c/capture_backend.h/.c) needs only
 # CAP_NET_RAW, not a separate packet-capture driver/SDK like Npcap.
@@ -31,23 +53,15 @@ add_executable(my_wireshark
     src/c/capture_backend.h
     src/c/capture_backend_linux.c
     src/c/raw_socket.c
-    src/c/raw_socket.h
-    src/c/checksum.c
-    src/c/checksum.h
-    src/c/eth_parser.c
-    src/c/eth_parser.h
-    src/c/ip_parser.c
-    src/c/ip_parser.h
-    src/c/ipv6_parser.c
-    src/c/ipv6_parser.h
-    src/c/arp_parser.c
-    src/c/arp_parser.h
-    src/c/tcp_udp_parser.c
-    src/c/tcp_udp_parser.h)
+    src/c/raw_socket.h)
 
 target_include_directories(my_wireshark PRIVATE src)
+target_link_libraries(my_wireshark PRIVATE wireshark_parsers)
 
 target_compile_options(my_wireshark PRIVATE
     $<$<COMPILE_LANGUAGE:C>:-Wall -Wextra>
     $<$<COMPILE_LANGUAGE:CXX>:-Wall -Wextra>
 )
+
+enable_testing()
+add_subdirectory(src/tests)
