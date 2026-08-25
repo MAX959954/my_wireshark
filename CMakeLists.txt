@@ -6,36 +6,16 @@ set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-if (WIN32)
-
-# Npcap SDK (headers + import libs) is separate from the Npcap runtime driver.
-# 1. Install the Npcap runtime: https://npcap.com/#download -> "Npcap installer"
-#    (check "Install Npcap in WinPcap API-compatible Mode").
-# 2. Download the SDK zip from the same page -> "Npcap SDK", unzip it anywhere.
-# 3. Configure with -DNPCAP_SDK_DIR=<path-to-unzipped-sdk>, or set the
-#    NPCAP_SDK_DIR environment variable before running cmake.
-set(NPCAP_SDK_DIR "" CACHE PATH "Path to the unzipped Npcap SDK")
-
-if (NOT NPCAP_SDK_DIR AND DEFINED ENV{NPCAP_SDK_DIR})
-    set(NPCAP_SDK_DIR "$ENV{NPCAP_SDK_DIR}")
-endif()
-
-if (NOT EXISTS "${NPCAP_SDK_DIR}/Include/pcap.h")
+if (NOT UNIX)
     message(FATAL_ERROR
-        "Npcap SDK not found (looked for Include/pcap.h under NPCAP_SDK_DIR="
-        "'${NPCAP_SDK_DIR}'). Download the SDK from https://npcap.com/#download, "
-        "unzip it, then reconfigure with -DNPCAP_SDK_DIR=<path-to-unzipped-sdk>.")
+        "my_wireshark targets Linux only: capture is done via AF_PACKET raw "
+        "sockets (src/c/raw_socket.c), which needs Linux-specific headers "
+        "(linux/if_packet.h etc). Windows/Npcap support has been removed.")
 endif()
 
-if (CMAKE_SIZEOF_VOID_P EQUAL 8)
-    set(NPCAP_LIB_DIR "${NPCAP_SDK_DIR}/Lib/x64")
-else()
-    set(NPCAP_LIB_DIR "${NPCAP_SDK_DIR}/Lib")
-endif()
-
-# raw_socket.c/.h implement an AF_PACKET-based capture path for Linux/WSL and
-# are not part of this Windows+Npcap target (they won't compile with MSVC's
-# Windows headers); see the UNIX branch below for their build target.
+# AF_PACKET-based capture (src/c/raw_socket.c, wrapped behind the
+# capture_backend_t interface in src/c/capture_backend.h/.c) needs only
+# CAP_NET_RAW, not a separate packet-capture driver/SDK like Npcap.
 add_executable(my_wireshark
     src/main.cpp
     src/cpp/packet.cpp
@@ -44,8 +24,14 @@ add_executable(my_wireshark
     src/cpp/tcp_packet.h
     src/cpp/udp_packet.cpp
     src/cpp/udp_packet.h
-    src/c/capture.c
-    src/c/capture.h
+    src/cpp/arp_packet.cpp
+    src/cpp/arp_packet.h
+    src/cpp/ipv6_packet.cpp
+    src/cpp/ipv6_packet.h
+    src/c/capture_backend.h
+    src/c/capture_backend_linux.c
+    src/c/raw_socket.c
+    src/c/raw_socket.h
     src/c/checksum.c
     src/c/checksum.h
     src/c/eth_parser.c
@@ -59,43 +45,9 @@ add_executable(my_wireshark
     src/c/tcp_udp_parser.c
     src/c/tcp_udp_parser.h)
 
-set_source_files_properties(
-    src/c/capture.c
-    src/c/checksum.c
-    src/c/eth_parser.c
-    src/c/ip_parser.c
-    src/c/ipv6_parser.c
-    src/c/arp_parser.c
-    src/c/tcp_udp_parser.c
-    PROPERTIES LANGUAGE C
-)
-
-target_include_directories(my_wireshark PRIVATE
-    src
-    "${NPCAP_SDK_DIR}/Include"
-)
-
-target_link_directories(my_wireshark PRIVATE "${NPCAP_LIB_DIR}")
-target_link_libraries(my_wireshark PRIVATE wpcap Packet ws2_32)
+target_include_directories(my_wireshark PRIVATE src)
 
 target_compile_options(my_wireshark PRIVATE
-    $<$<C_COMPILER_ID:MSVC>:/W4>
-    $<$<CXX_COMPILER_ID:MSVC>:/W4>
-    $<$<AND:$<COMPILE_LANGUAGE:C>,$<NOT:$<C_COMPILER_ID:MSVC>>>:-Wall -Wextra>
-    $<$<AND:$<COMPILE_LANGUAGE:CXX>,$<NOT:$<CXX_COMPILER_ID:MSVC>>>:-Wall -Wextra>
+    $<$<COMPILE_LANGUAGE:C>:-Wall -Wextra>
+    $<$<COMPILE_LANGUAGE:CXX>:-Wall -Wextra>
 )
-
-elseif (UNIX)
-
-# AF_PACKET-based capture path for Linux/WSL, built separately from the
-# Windows+Npcap target above so it gets a real compile command (and thus
-# working IntelliSense) under the Linux-GCC-Debug configuration.
-add_executable(raw_socket_test
-    src/c/raw_socket.c
-    src/c/raw_socket.h)
-
-target_include_directories(raw_socket_test PRIVATE src)
-
-target_compile_options(raw_socket_test PRIVATE -Wall -Wextra)
-
-endif()

@@ -8,18 +8,18 @@ extern "C" {
 #endif
 
 /*
-добавляет 'data' (длиной 'len' байт, в сетевом порядке) к незавершённой сумме
-'sum' в дополнительном коде (RFC 1071). Нечётный последний байт дополняется
-нулём справа. Возвращает обновлённую, ещё не свёрнутую сумму — так несколько
-кусков (например, pseudo-header и сам сегмент) можно просуммировать по очереди
-перед одной финальной сверткой.
+adds 'data' (network-order, 'len' bytes long) into the not-yet-folded ones'
+complement sum 'sum' (RFC 1071). A trailing odd byte is padded with a zero
+on the right. Returns the updated, still-unfolded sum, so several chunks
+(e.g. a pseudo-header and the segment itself) can be accumulated in turn
+before one final fold.
 */
 uint32_t checksum_partial(const uint8_t* data, uint32_t len, uint32_t sum);
 
 /*
-проверяет корректность чек-суммы, уже присутствующей внутри 'data' (длиной
-'len' байт) — поле checksum обнулять не нужно. Возвращает 1, если чек-сумма
-верна, иначе 0.
+verifies the checksum already present inside 'data' ('len' bytes long) - the
+checksum field does not need to be zeroed first. Returns 1 if the checksum
+is correct, 0 otherwise.
 */
 int checksum_verify(const uint8_t* data, uint32_t len);
 
