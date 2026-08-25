@@ -29,18 +29,17 @@ typedef struct {
 #define ETH_VLAN_PCP(tci) ((uint8_t)((tci) >> 13))
 
 /*
-анализирует исходный кадр Ethernet II, начинающийся с 'data'.
-При успешном заполнении 'out_header', указывает 'out_payload'
-на байт прямо после 14-байтного заголовка, а 'out_payload_len'
-на оставшуюся длину, затем возвращает 0. Возвращает -1, если 'length'
-слишком короткий для полного заголовка.
+parses a raw Ethernet II frame starting at 'data'. On success, fills
+'out_header', points 'out_payload' at the byte right after the 14-byte
+header, and 'out_payload_len' at the remaining length, then returns 0.
+Returns -1 if 'length' is too short for a full header.
 */
 int eth_parse(const uint8_t* data, uint32_t length, eth_header_t* out_header,
     const uint8_t** out_payload, uint32_t* out_payload_len);
 
 /*
-формирует MAC-адрес как "xx:xx:xx:xx:xx:xx" в 'output', который должен
-быть длиной как минимум ETH_MAC_STR_LEN байт.
+formats a MAC address as "xx:xx:xx:xx:xx:xx" into 'output', which must be
+at least ETH_MAC_STR_LEN bytes long.
 */
 #define ETH_MAC_STR_LEN 18
 void eth_mac_to_str(const uint8_t mac[ETH_ADDR_LEN], char* output);

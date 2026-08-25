@@ -27,22 +27,22 @@ typedef struct {
     uint16_t checksum;
     uint8_t src_addr[IP_ADDR_LEN];
     uint8_t dst_addr[IP_ADDR_LEN];
-    uint8_t checksum_valid; /* 1, если чек-сумма заголовка верна, иначе 0 */
+    uint8_t checksum_valid; /* 1 if the header checksum is correct, 0 otherwise */
 } ip_header_t;
 
 /*
-анализирует сырой пакет IPv4, начинающийся с 'data'. При успешном заполнении
-'out_header', указывает 'out_payload' на байт прямо после (переменной длины,
-с учётом опций) IP-заголовка, а 'out_payload_len' на оставшуюся длину, затем
-возвращает 0. Возвращает -1, если 'length' слишком короткая, версия не 4,
-или IHL сообщает о заголовке короче IP_HEADER_MIN_LEN либо длиннее 'length'.
+parses a raw IPv4 packet starting at 'data'. On success, fills 'out_header',
+points 'out_payload' at the byte right after the (variable-length, options
+included) IP header, and 'out_payload_len' at the remaining length, then
+returns 0. Returns -1 if 'length' is too short, the version isn't 4, or the
+IHL reports a header shorter than IP_HEADER_MIN_LEN or longer than 'length'.
 */
 int ip_parse(const uint8_t* data, uint32_t length, ip_header_t* out_header,
     const uint8_t** out_payload, uint32_t* out_payload_len);
 
 /*
-формирует IPv4-адрес как "a.b.c.d" в 'output', который должен быть длиной
-как минимум IP_ADDR_STR_LEN байт.
+formats an IPv4 address as "a.b.c.d" into 'output', which must be at least
+IP_ADDR_STR_LEN bytes long.
 */
 #define IP_ADDR_STR_LEN 16
 void ip_addr_to_str(const uint8_t addr[IP_ADDR_LEN], char* output);

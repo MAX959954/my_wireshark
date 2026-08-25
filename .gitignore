@@ -2,3 +2,16 @@ build/
 out/
 .vs/
 *.user
+CMakeUserPresets.json
+
+# compiler/linker artifacts, in case of an in-source build
+*.obj
+*.o
+*.exe
+*.pdb
+*.ilk
+*.exp
+*.lib
+
+.vscode/
+.idea/

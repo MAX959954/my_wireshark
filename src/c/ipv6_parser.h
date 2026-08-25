@@ -22,18 +22,18 @@ extern "C" {
     } ipv6_header_t;
      
     /*
-    анализирует сырой пакет IPv6, начинающийся с 'data'. При успешном заполнении
-    'out_header', указывает 'out_payload' на байт прямо после (фиксированного
-    размера IPV6_HEADER_LEN) IPv6-заголовка, а 'out_payload_len' на оставшуюся
-    длину, затем возвращает 0. Возвращает -1, если 'length' короче
-    IPV6_HEADER_LEN или версия не 6.
+    parses a raw IPv6 packet starting at 'data'. On success, fills 'out_header',
+    points 'out_payload' at the byte right after the (fixed-size,
+    IPV6_HEADER_LEN) IPv6 header, and 'out_payload_len' at the remaining
+    length, then returns 0. Returns -1 if 'length' is shorter than
+    IPV6_HEADER_LEN or the version isn't 6.
     */
     int ipv6_parse(const uint8_t* data, uint32_t length, ipv6_header_t* out_header,
         const uint8_t** out_payload, uint32_t* out_payload_len);
 
     /*
-    формирует IPv6-адрес в стандартной записи "xxxx:xxxx:...:xxxx" в 'output',
-    который должен быть длиной как минимум IPV6_ADDR_STR_LEN байт.
+    formats an IPv6 address in standard "xxxx:xxxx:...:xxxx" notation into
+    'output', which must be at least IPV6_ADDR_STR_LEN bytes long.
     */
 #define IPV6_ADDR_STR_LEN 40
     void ipv6_addr_to_str(const uint8_t addr[IPV6_ADDR_LEN], char* output);

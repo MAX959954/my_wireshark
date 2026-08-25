@@ -15,30 +15,30 @@
 
 class Packet {
 public :
-	Packet(uint32_t  ts_seconds, uint32_t ts_microseconds, uint32_t  capture_length,
-		const eth_header_t& eth, std::optional<ip_header_t> ip = std::nullopt);
+    Packet(uint32_t  ts_seconds, uint32_t ts_microseconds, uint32_t  capture_length,
+        const eth_header_t& eth, std::optional<ip_header_t> ip = std::nullopt);
 
-	virtual ~Packet() = default;
+    virtual ~Packet() = default;
 
-	uint32_t  timestamp_secods() const noexcept { return ts_seconds_; }
-	uint32_t timestamp_microseconds()  const noexcept {return ts_microseconds_;}
-	uint32_t capture_length() const noexcept { return capture_length_; }
-	
-	const eth_header_t& ethernet() const noexcept { return eth_; }
-	bool has_ip() const noexcept { return ip_.has_value(); }
+    uint32_t  timestamp_secods() const noexcept { return ts_seconds_; }
+    uint32_t timestamp_microseconds()  const noexcept {return ts_microseconds_;}
+    uint32_t capture_length() const noexcept { return capture_length_; }
+    
+    const eth_header_t& ethernet() const noexcept { return eth_; }
+    bool has_ip() const noexcept { return ip_.has_value(); }
 
-	const ip_header_t& ip() const { return *ip_; }
+    const ip_header_t& ip() const { return *ip_; }
 
-	virtual const char* protocol_name() const noexcept { return has_ip() ? "IP" : "ETH"; }
+    virtual const char* protocol_name() const noexcept { return has_ip() ? "IP" : "ETH"; }
 
-	// Writes a one-line summary. Derived classes call Packet::print() first,
-	// then append their own transport-layer fields
-	virtual void print(std::ostream& os) const;
+    // Writes a one-line summary. Derived classes call Packet::print() first,
+    // then append their own transport-layer fields
+    virtual void print(std::ostream& os) const;
 
 private :
-	uint32_t ts_seconds_;
-	uint32_t ts_microseconds_;
-	uint32_t capture_length_;
-	eth_header_t eth_;
-	std::optional<ip_header_t> ip_;
+    uint32_t ts_seconds_;
+    uint32_t ts_microseconds_;
+    uint32_t capture_length_;
+    eth_header_t eth_;
+    std::optional<ip_header_t> ip_;
 };
