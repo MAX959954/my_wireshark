@@ -1,9 +1,4 @@
-/*
-Linux capture backend: implements the capture_backend_t interface on top of
-raw_socket.c (AF_PACKET raw sockets). This is currently the only backend, but
-main.cpp reaches it only through capture_backend.h, so it never depends on
-raw_socket.h directly.
-*/
+
 #include "capture_backend.h"
 #include "raw_socket.h"
 
@@ -11,46 +6,58 @@ raw_socket.h directly.
 #include <stdio.h>
 #include <string.h>
 
-/* pcap file format (see https://wiki.wireshark.org/Development/LibpcapFileFormat).
-   Written by hand here instead of linking libpcap, since raw_socket.c already
-   avoids that dependency. */
 typedef struct {
-    uint32_t magic_number;
-    uint16_t version_major;
-    uint16_t version_minor;
-    int32_t  thiszone;
-    uint32_t sigfigs;
-    uint32_t snaplen;
-    uint32_t network;
-} pcap_global_header_t;
+    uint32_t magic_number; // 0xa1b2c3d4 — маркер "это pcap, время в микросекундах"
+    uint16_t version_major;  // 2 
+    uint16_t version_minor;  // 4 
+    int32_t  thiszone; // смещение таймзоны от UTC (0 = UTC)
+    uint32_t sigfigs; // точность меток времени (всегда 0 на практике)
+    uint32_t snaplen; // макс. сохранённая длина кадра
+    uint32_t network; // тип канального уровня: 1 = Ethernet
+} pcap_global_header_t;  // 24 байта, один раз в начале файла
 
 typedef struct {
-    uint32_t ts_sec;
-    uint32_t ts_usec;
-    uint32_t incl_len;
-    uint32_t orig_len;
-} pcap_record_header_t;
+    uint32_t ts_sec;  // секунды приёма
+    uint32_t ts_usec; // микросекунды
+    uint32_t incl_len;  // сколько байт кадра реально записано
+    uint32_t orig_len; // какой была реальная длина кадра на проводе
+} pcap_record_header_t;  // 16 байт, перед каждым пакетом
 
 #define PCAP_MAGIC_MICROSECONDS 0xa1b2c3d4u
 #define PCAP_LINKTYPE_ETHERNET  1u
 
-/* ctx of the run() call currently blocked below, or NULL when nothing is
-   running; only ever read by the SIGINT handler / request_stop(), so a plain
-   volatile pointer is enough - there's no concurrent writer. */
+
+
+/*
+Проблема: Ctrl+C шлёт SIGINT, обработчик получает только
+номер сигнала — ни ctx, ни argc, ничего. А
+чтобы остановить захват, нужен указатель на активный
+raw_socket_ctx_t. Решение — положить его в
+файловую статическую переменную.
+*/
+
+//volatile запрещает компилятору кешировать значение
+// в регистре, заставляет читать из памяти.
 static raw_socket_ctx_t* volatile g_active_ctx = NULL;
 
 static void request_stop_impl(void) {
     raw_socket_ctx_t* ctx = g_active_ctx;
     if (ctx != NULL) {
-        raw_socket_request_stop(ctx);
+        raw_socket_request_stop(ctx); // async-signal-safe: внутри только atomic_store
     }
 }
 
 static void on_sigint(int signum) {
-    (void)signum;
+    (void)signum;  // явно "параметр не используется" — глушим предупреждение
     request_stop_impl();
 }
 
+/*
+Чистый адаптер: зовёт raw_socket_list_devices, перекладывает
+raw_socket_device_t → capture_device_t.
+Разные типы у двух слоёв — намеренно, чтобы capture_backend.h
+не включал raw_socket.h
+*/
 static int list_devices_impl(capture_device_t* output, int max_devices) {
     if (max_devices > CAPTURE_MAX_DEVICES) {
         max_devices = CAPTURE_MAX_DEVICES;
@@ -72,6 +79,7 @@ static int list_devices_impl(capture_device_t* output, int max_devices) {
     return count;
 }
 
+//записал ровно 1 элемент размера sizeof(hdr)». Иначе -1
 static int write_pcap_global_header(FILE* f) {
     pcap_global_header_t hdr;
     hdr.magic_number = PCAP_MAGIC_MICROSECONDS;
@@ -84,6 +92,7 @@ static int write_pcap_global_header(FILE* f) {
     return fwrite(&hdr, sizeof(hdr), 1, f) == 1 ? 0 : -1;
 }
 
+//записал ровно 1 элемент размера sizeof(hdr)». Иначе -1
 static int write_pcap_record(FILE* f, const uint8_t* data, uint32_t len,
     uint32_t ts_seconds, uint32_t ts_microseconds) {
     pcap_record_header_t rec;
@@ -115,10 +124,10 @@ static int run_impl(const char* device_name, const char* bpf_filter,
 
     FILE* pcap_file = NULL;
     if (pcap_output_path != NULL && pcap_output_path[0] != 0) {
-        pcap_file = fopen(pcap_output_path, "wb");
+        pcap_file = fopen(pcap_output_path, "wb"); // "wb" — бинарный режим (важно на Windows/WSL)
         if (pcap_file == NULL) {
             perror("fopen");
-            raw_socket_close(ctx);
+            raw_socket_close(ctx); // откат: закрыть уже открытый сокет
             return -1;
         }
         if (write_pcap_global_header(pcap_file) != 0) {
@@ -129,9 +138,16 @@ static int run_impl(const char* device_name, const char* bpf_filter,
         }
     }
 
-    g_active_ctx = ctx;
+    g_active_ctx = ctx; // теперь Ctrl+C знает, что стопить
+    // ставим свой обработчик,
     void (*previous_sigint_handler)(int) = signal(SIGINT, on_sigint);
 
+    /*
+    буфер не на стеке (64 КБ на стеке — рискованно), а в статической
+    памяти. Один на все вызовы. Ок,
+    пока run_impl не вызывают из двух потоков одновременно
+    (не вызывают)
+    */
     static uint8_t buf[RAW_SOCKET_MAX_FRAME];
     int result = 0;
     for (;;) {
@@ -153,16 +169,24 @@ static int run_impl(const char* device_name, const char* bpf_filter,
             break;
         }
 
+        // → on_packet → парсеры
         cb(buf, (uint32_t)n, ts_seconds, ts_microseconds, user_data);
     }
 
-    signal(SIGINT, previous_sigint_handler);
-    g_active_ctx = NULL;
+    /*
+    Порядок на каждый пакет: сначала записать в файл, потом разобрать
+    и напечатать. Логично — в
+    .pcap попадёт сырой кадр, даже если парсер потом на нём
+    споткнётся.
+    */
 
-    if (pcap_file != NULL) {
+    signal(SIGINT, previous_sigint_handler); // вернуть прежний обработчик
+    g_active_ctx = NULL; // больше ничего активного
+     
+    if (pcap_file != NULL) {  // флашит буфер, дописывает файл
         fclose(pcap_file);
     }
-    raw_socket_close(ctx);
+    raw_socket_close(ctx); // close(fd) + free
     return result;
 }
 
