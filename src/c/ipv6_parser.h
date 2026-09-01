@@ -7,27 +7,27 @@
 extern "C" {
 #endif
 
-#define IPV6_ADDR_LEN    16
-#define IPV6_HEADER_LEN  40
+/*
+IPv6 придуман потому, что 4-байтовых адресов IPv4 (≈4 млрд)
+на планету не хватило. В IPv6 адрес — 16
+байт (2¹²⁸ штук). Заодно упростили заголовок.
+*/
+
+#define IPV6_ADDR_LEN    16 // адрес 16 байт
+#define IPV6_HEADER_LEN  40  // заголовок всегда 40 байт (константа, не переменная!)
 
     typedef struct {
         uint8_t  version;        /* always 6 */
-        uint8_t  traffic_class;
+        uint8_t  traffic_class;  // приоритет/QoS — аналог TOS в IPv4
         uint32_t flow_label;     /* low 20 bits significant */
-        uint16_t payload_length;
-        uint8_t  next_header;
-        uint8_t  hop_limit;
+        uint16_t payload_length; // длина ТОЛЬКО данных после заголовка (не весь пакет!)
+        uint8_t  next_header;    // что дальше: 6=TCP, 17=UDP, 58=ICMPv6, 0/43/44=ext.header
+        uint8_t  hop_limit;      // сколько роутеров ещё пройдёт (было "TTL")   
         uint8_t  src_addr[IPV6_ADDR_LEN];
         uint8_t  dst_addr[IPV6_ADDR_LEN];
     } ipv6_header_t;
      
-    /*
-    parses a raw IPv6 packet starting at 'data'. On success, fills 'out_header',
-    points 'out_payload' at the byte right after the (fixed-size,
-    IPV6_HEADER_LEN) IPv6 header, and 'out_payload_len' at the remaining
-    length, then returns 0. Returns -1 if 'length' is shorter than
-    IPV6_HEADER_LEN or the version isn't 6.
-    */
+   
     int ipv6_parse(const uint8_t* data, uint32_t length, ipv6_header_t* out_header,
         const uint8_t** out_payload, uint32_t* out_payload_len);
 

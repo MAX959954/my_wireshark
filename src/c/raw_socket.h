@@ -7,46 +7,58 @@
 extern "C" {
 #endif
 
-#define RAW_SOCKET_MAX_DEVICES 32
-#define RAW_SOCKET_NAME_LEN 256
-#define RAW_SOCKET_MAX_FRAME 65536
+/*
+источник данных, самый низ стека (L1/L2 граница): он просит у
+ядра Linux копию каждого кадра,
+который проходит через сетевую карту, и отдаёт наверх сырой
+буфер + метку времени.
 
-typedef struct {
-    char name[RAW_SOCKET_NAME_LEN];
-} raw_socket_device_t;
+Дальше по цепочке: raw_socket → capture_backend_linux (обёртка
++ запись в .pcap) → main.cpp →
+парсеры.
+
+*/
 
 /*
-enumerates network interfaces via getifaddrs(), de-duplicated by name.
-Returns the number of entries written into 'output' (<= max_device), or -1
-on error. Does not require administrator privileges.
+ Обычный сокет (AF_INET) даёт тебе только
+ payload твоих собственных соединений — ядро уже сняло
+ Ethernet/IP/TCP.
+
+ socket(AF_PACKET, SOCK_RAW, ETH_P_ALL) — особый сокет Linux:
+
+AF_PACKET — работаем на канальном уровне (L2)
+SOCK_RAW — отдавай кадр целиком, включая Ethernet-заголовок
+ETH_P_ALL — все протоколы, весь трафик, не только адресованный нам
+
+Это ровно то, что нужно снифферу. Требует привилегии
+CAP_NET_RAW (root или setcap cap_net_raw+ep),
+потому что позволяет читать чужой трафик
 */
+
+#define RAW_SOCKET_MAX_DEVICES 32 // максимум интерфейсов в списке
+#define RAW_SOCKET_NAME_LEN 256 // макс. длина имени интерфейса ("eth0", "wlan0"...)
+#define RAW_SOCKET_MAX_FRAME 65536 // макс. размер кадра (буфер под один пакет)
+
+typedef struct {
+    char name[RAW_SOCKET_NAME_LEN];// просто имя интерфейса
+} raw_socket_device_t;
+
+//перечислить интерфейсы
 int raw_socket_list_devices(raw_socket_device_t* output, int max_devices);
 
 typedef struct raw_socket_ctx raw_socket_ctx_t;
 
-/*
-opens an AF_PACKET/SOCK_RAW/ETH_P_ALL socket bound to 'device_name' via
-SO_BINDTODEVICE, and enables promiscuous mode where possible. Requires
-CAP_NET_RAW (root or setcap). Returns NULL on error (with a message via
-perror).
-*/
+// открыть сокет на интерфейсе
 raw_socket_ctx_t* raw_socket_open(const char* device_name);
 
-/*
-blocking receive of one full Ethernet frame (including the 14-byte L2
-header) into 'buf'. Returns >0 - the number of bytes received (and fills
-'out_ts_seconds'/'out_ts_microseconds'), 0 - a stop was requested (clean
-shutdown), -1 - error (errno is set, perror already called).
-*/
+//принять один кадр (блокирующе)
 int raw_socket_recv(raw_socket_ctx_t* ctx, uint8_t* buf, uint32_t buf_len,
     uint32_t* out_ts_seconds, uint32_t* out_ts_microseconds);
 
-/*
-thread-safe (atomic). Calling from any thread makes a blocking
-raw_socket_recv() on this 'ctx' return 0 within ~200ms.
-*/
+//попросить recv завершиться (из другого потока/сигнала)
 void raw_socket_request_stop(raw_socket_ctx_t* ctx);
 
+//закрыть + освободить
 void raw_socket_close(raw_socket_ctx_t* ctx);
 
 #ifdef __cplusplus

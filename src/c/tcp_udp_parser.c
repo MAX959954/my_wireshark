@@ -3,31 +3,44 @@
 #include <stddef.h>
 
 #define IPV4_PROTO_TCP 6
-#define IPV4_PROTO_UDP 17
+#define IPV4_PROTO_UDP 17 // нужны для псевдо-заголовка (поле protocol в нём)
 
 int tcp_parse(const uint8_t* data, uint32_t length, tcp_header_t* out_header,
     const uint8_t** out_payload, uint32_t* out_payload_len) {
 
     if (data == NULL || out_header == NULL || length < TCP_HEADER_MIN_LEN) {
-        return -1;
+        return -1;  // меньше 20 байт
     }
 
-    uint8_t data_offset = data[12] >> 4;
-    uint32_t header_len = (uint32_t)data_offset * 4;
+    uint8_t data_offset = data[12] >> 4;//Data Offset в 32-битных словах
+    uint32_t header_len = (uint32_t)data_offset * 4; // слова → байты
 
+    /*
+    < 5 — заголовок не может быть короче 20 байт → битый пакет
+    header_len > length — заголовок с опциями торчит за буфер → не читаем, иначе выход за границы
+    */
     if (data_offset < 5 || header_len > length) {
         return -1;
     }
 
     out_header->src_port = (uint16_t)((data[0] << 8) | data[1]);
     out_header->dst_port = (uint16_t)((data[2] << 8) | data[3]);
+
+    /*
+    seq_num/ack_num — 32-битные, собираются из 4 байт. (uint32_t) перед каждым сдвигом обязателен:
+    data[4] имеет тип int (после integer promotion), data[4] << 24 для значения ≥ 128 залезет в
+    знаковый бит int — это UB. Приведение к uint32_t до сдвига это чинит
+    */
     out_header->seq_num = ((uint32_t)data[4] << 24) | ((uint32_t)data[5] << 16) |
         ((uint32_t)data[6] << 8) | data[7];
     out_header->ack_num = ((uint32_t)data[8] << 24) | ((uint32_t)data[9] << 16) |
         ((uint32_t)data[10] << 8) | data[11];
 
     out_header->data_offset = data_offset;
-    out_header->flags = data[13] & 0x3F;
+
+    //& 0x3F отрезает старшие 2 бита (CWR, ECE), оставляя URG ACK PSH RST SYN FIN.
+    // Маска — потому что структура заведена только под 6 флагов.
+    out_header->flags = data[13] & 0x3F; // 0011 1111 — оставить 6 младших бит
 
     out_header->window_size = (uint16_t)((data[14] << 8) | data[15]);
     out_header->checksum = (uint16_t)((data[16] << 8) | data[17]);
@@ -76,29 +89,32 @@ static int verify_with_ipv4_pseudo_header(const uint8_t* segment, uint32_t segme
     uint8_t pseudo_header[12];
     uint32_t sum;
 
-    pseudo_header[0] = src_ip[0];
-    pseudo_header[1] = src_ip[1];
-    pseudo_header[2] = src_ip[2];
+    pseudo_header[0] = src_ip[0]; // IP отправителя
+    pseudo_header[1] = src_ip[1]; 
+    pseudo_header[2] = src_ip[2]; 
     pseudo_header[3] = src_ip[3];
-    pseudo_header[4] = dst_ip[0];
+    pseudo_header[4] = dst_ip[0];  // IP получателя
     pseudo_header[5] = dst_ip[1];
     pseudo_header[6] = dst_ip[2];
     pseudo_header[7] = dst_ip[3];
-    pseudo_header[8] = 0;
-    pseudo_header[9] = protocol;
-    pseudo_header[10] = (uint8_t)(segment_len >> 8);
-    pseudo_header[11] = (uint8_t)(segment_len & 0xFF);
+    pseudo_header[8] = 0;  // reserved / zero
+    pseudo_header[9] = protocol; // 6 (TCP) или 17 (UDP)
+    pseudo_header[10] = (uint8_t)(segment_len >> 8); // длина L4-сегмента, старший байт
+    pseudo_header[11] = (uint8_t)(segment_len & 0xFF);// младший байт
 
+    // сначала псевдо-заголовок
     sum = checksum_partial(pseudo_header, sizeof(pseudo_header), 0);
+    // потом весь сегмент накопительно
     sum = checksum_partial(segment, segment_len, sum);
 
     while (sum >> 16) {
-        sum = (sum & 0xFFFF) + (sum >> 16);
+        sum = (sum & 0xFFFF) + (sum >> 16);// свернуть перенос (RFC 1071)
     }
 
     return (sum & 0xFFFF) == 0xFFFF;
 }
 
+//Просто обёртка с проверками + фиксирует protocol = 6
 int tcp_verify_checksum(const uint8_t* segment, uint32_t segment_len,
     const uint8_t src_ip[4], const uint8_t dst_ip[4]) {
 
@@ -118,9 +134,15 @@ int udp_verify_checksum(const uint8_t* segment, uint32_t segment_len,
         return 0;
     }
 
+    /*
+    checksum == 0 → сразу «валидна», потому что для UDP это
+    допустимо. У TCP чексумма обязательна,
+    там 0 — это просто неверная сумма.
+    */
+
     checksum_field = (uint16_t)((segment[6] << 8) | segment[7]);
     if (checksum_field == 0) {
-        return 1;
+        return 1; // отправитель не считал чексумму — считаем "ок" (это легально в IPv4)
     }
 
     return verify_with_ipv4_pseudo_header(segment, segment_len, src_ip, dst_ip, IPV4_PROTO_UDP);
