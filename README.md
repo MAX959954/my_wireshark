@@ -87,5 +87,4 @@ are then decoded and printed to stdout in real time until you stop the capture w
 
 ## License
 
-No license has been chosen yet — add one (e.g. MIT) before treating this as open source others can
-freely reuse.
+MIT — see [LICENSE](LICENSE).
