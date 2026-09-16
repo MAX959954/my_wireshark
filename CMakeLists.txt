@@ -35,11 +35,12 @@ target_include_directories(wireshark_parsers PUBLIC src)
 
 target_compile_options(wireshark_parsers PRIVATE -Wall -Wextra)
 
-# AF_PACKET-based capture (src/c/raw_socket.c, wrapped behind the
-# capture_backend_t interface in src/c/capture_backend.h/.c) needs only
-# CAP_NET_RAW, not a separate packet-capture driver/SDK like Npcap.
-add_executable(my_wireshark
-    src/main.cpp
+# C++ presentation layer: turns parsed headers into human-readable summary
+# lines. Built as a library (same reasoning as wireshark_parsers above) so
+# main.cpp and test_capture_pipeline.cpp link the exact same object code -
+# the print half of the "capture -> parse -> print" pipeline is exercised
+# identically whether the packets come from a real NIC or a fake backend.
+add_library(wireshark_presentation STATIC
     src/cpp/packet.cpp
     src/cpp/packet.h
     src/cpp/tcp_packet.cpp
@@ -50,13 +51,25 @@ add_executable(my_wireshark
     src/cpp/arp_packet.h
     src/cpp/ipv6_packet.cpp
     src/cpp/ipv6_packet.h
+    src/cpp/packet_printer.cpp
+    src/cpp/packet_printer.h)
+
+target_include_directories(wireshark_presentation PUBLIC src)
+target_link_libraries(wireshark_presentation PUBLIC wireshark_parsers)
+target_compile_options(wireshark_presentation PRIVATE -Wall -Wextra)
+
+# AF_PACKET-based capture (src/c/raw_socket.c, wrapped behind the
+# capture_backend_t interface in src/c/capture_backend.h/.c) needs only
+# CAP_NET_RAW, not a separate packet-capture driver/SDK like Npcap.
+add_executable(my_wireshark
+    src/main.cpp
     src/c/capture_backend.h
     src/c/capture_backend_linux.c
     src/c/raw_socket.c
     src/c/raw_socket.h)
 
 target_include_directories(my_wireshark PRIVATE src)
-target_link_libraries(my_wireshark PRIVATE wireshark_parsers)
+target_link_libraries(my_wireshark PRIVATE wireshark_presentation)
 
 target_compile_options(my_wireshark PRIVATE
     $<$<COMPILE_LANGUAGE:C>:-Wall -Wextra>

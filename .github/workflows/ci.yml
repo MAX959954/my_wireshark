@@ -1,0 +1,44 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build-and-test:
+    name: ${{ matrix.name }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: warnings-as-errors
+            c_flags: "-Wall -Wextra -Werror"
+            cxx_flags: "-Wall -Wextra -Werror"
+            ld_flags: ""
+          - name: asan-ubsan
+            c_flags: "-fsanitize=address,undefined -fno-omit-frame-pointer -g -Wall -Wextra"
+            cxx_flags: "-fsanitize=address,undefined -fno-omit-frame-pointer -g -Wall -Wextra"
+            ld_flags: "-fsanitize=address,undefined"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure
+        run: >
+          cmake -S . -B build
+          -DCMAKE_BUILD_TYPE=Debug
+          -DCMAKE_C_FLAGS="${{ matrix.c_flags }}"
+          -DCMAKE_CXX_FLAGS="${{ matrix.cxx_flags }}"
+          -DCMAKE_EXE_LINKER_FLAGS="${{ matrix.ld_flags }}"
+
+      - name: Build
+        run: cmake --build build --parallel
+
+      - name: Test
+        working-directory: build
+        env:
+          ASAN_OPTIONS: detect_leaks=1
+          UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
+        run: ctest --output-on-failure
