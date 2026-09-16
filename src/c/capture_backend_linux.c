@@ -1,4 +1,5 @@
 
+#include "capfilter.h"
 #include "capture_backend.h"
 #include "raw_socket.h"
 
@@ -112,15 +113,32 @@ static int write_pcap_record(FILE* f, const uint8_t* data, uint32_t len,
 static int run_impl(const char* device_name, const char* bpf_filter,
     const char* pcap_output_path, capture_packet_cb cb, void* user_data) {
 
+    struct sock_fprog filter_prog = { 0, NULL };
     if (bpf_filter != NULL && bpf_filter[0] != 0) {
-        fprintf(stderr, "warning: BPF filtering is not supported by the "
-            "raw-socket backend; capturing all traffic on %s\n", device_name);
+        char err[128];
+        if (capfilter_compile(bpf_filter, &filter_prog, err, sizeof(err)) != 0) {
+            fprintf(stderr, "error: invalid filter expression \"%s\": %s\n", bpf_filter, err);
+            return -1;
+        }
     }
 
     raw_socket_ctx_t* ctx = raw_socket_open(device_name);
     if (ctx == NULL) {
+        capfilter_free(&filter_prog);
         return -1;
     }
+
+    /* filter_prog.filter == NULL means "accept everything" (see
+       capfilter_compile's contract) - skip SO_ATTACH_FILTER entirely
+       rather than attaching a pointlessly empty program. */
+    if (filter_prog.filter != NULL) {
+        if (raw_socket_attach_filter(ctx, &filter_prog) != 0) {
+            capfilter_free(&filter_prog);
+            raw_socket_close(ctx);
+            return -1;
+        }
+    }
+    capfilter_free(&filter_prog); /* setsockopt() already copied it into the kernel */
 
     FILE* pcap_file = NULL;
     if (pcap_output_path != NULL && pcap_output_path[0] != 0) {

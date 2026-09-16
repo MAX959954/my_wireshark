@@ -62,6 +62,19 @@ raw_socket_ctx_t* raw_socket_open(const char* device_name);
 int raw_socket_recv(raw_socket_ctx_t* ctx, uint8_t* buf, uint32_t buf_len,
     uint32_t* out_ts_seconds, uint32_t* out_ts_microseconds);
 
+/*
+Прицепить скомпилированную BPF-программу (см. capfilter.h) к сокету через
+SO_ATTACH_FILTER. Дальше ядро отбрасывает ненужные пакеты само, ещё до
+того, как raw_socket_recv() их увидит — фильтрация в ядре, не в
+пользовательском пространстве. 'prog' не сохраняется (setsockopt копирует
+программу в ядро), можно освобождать через capfilter_free() сразу после
+вызова. Возвращает 0/-1; сама структура (linux/filter.h) сюда не
+подключается, чтобы raw_socket.h не тянул за собой BPF-детали для тех, кто
+не фильтрует.
+*/
+struct sock_fprog;
+int raw_socket_attach_filter(raw_socket_ctx_t* ctx, const struct sock_fprog* prog);
+
 //попросить recv завершиться (из другого потока/сигнала)
 void raw_socket_request_stop(raw_socket_ctx_t* ctx);
 

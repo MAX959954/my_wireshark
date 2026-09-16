@@ -11,9 +11,12 @@ on what tools like Wireshark and tcpdump do under the hood.
 
 ## Features
 
-- **Live capture** via `AF_PACKET` raw sockets (`src/c/raw_socket.c`), with an interface picker at
-  startup. Needs only `CAP_NET_RAW` (root, or `sudo setcap cap_net_raw+ep <binary>`) — no separate
-  packet-capture driver/SDK required.
+- **Live capture** via `AF_PACKET` raw sockets in **`PACKET_MMAP`/`TPACKET_V3`** ring-buffer mode
+  (`src/c/raw_socket.c`), with an interface picker at startup. The kernel and the process share a
+  memory-mapped ring of frames; the kernel fills it without our involvement and we drain it with
+  `poll()` instead of one `recv()` per packet — no per-packet syscall, no per-packet copy out of the
+  socket buffer. Needs only `CAP_NET_RAW` (root, or `sudo setcap cap_net_raw+ep <binary>`) — no
+  separate packet-capture driver/SDK required.
 - **`capture_backend_t` interface** (`src/c/capture_backend.h`) — a small vtable of function pointers
   (`list_devices`/`run`/`request_stop`) that `main.cpp` calls through instead of talking to
   `raw_socket.c` directly, so the capture implementation can be swapped (e.g. for tests) without
@@ -34,8 +37,14 @@ on what tools like Wireshark and tcpdump do under the hood.
   (see `capture_backend_request_stop()` in `src/c/capture_backend.h`/`capture_backend_linux.c`), so the
   capture loop exits cleanly instead of being killed mid-packet.
 - **pcap file output** (`-w`): captured frames are optionally written to a `.pcap` file using a small
-  hand-rolled writer in `capture_backend_linux.c`, openable directly in Wireshark. BPF filtering (`-f`)
-  is not currently supported by the raw-socket backend and is a no-op with a warning.
+  hand-rolled writer in `capture_backend_linux.c`, openable directly in Wireshark.
+- **BPF capture filters** (`-f`, e.g. `-f "tcp and port 443"`): a small from-scratch compiler
+  (`src/c/capfilter.c`) turns a `pcap-filter`-like expression into classic BPF bytecode and attaches it
+  with `SO_ATTACH_FILTER`, so filtering happens in the kernel, before packets are copied to us at all —
+  see [BPF capture filters](#bpf-capture-filters) below.
+- **Fuzz-tested parsers** (`src/fuzz/`): every protocol parser has a libFuzzer-compatible harness and a
+  seed corpus, replayed under ASan/UBSan on every push and fuzzed for real with libFuzzer in CI — see
+  [Fuzzing](#fuzzing) below.
 
 ## Project layout
 
@@ -52,19 +61,24 @@ src/
     ip_parser.c/.h                # IPv4 header parsing
     ipv6_parser.c/.h               # IPv6 header parsing
     tcp_udp_parser.c/.h             # TCP and UDP header parsing
+    capfilter.c/.h                   # "tcp port 443" -> classic BPF bytecode compiler
   cpp/
     packet.cpp/.h                    # base packet summary (Ethernet/IPv4)
     tcp_packet.cpp/.h                 # TCP-specific summary
     udp_packet.cpp/.h                  # UDP-specific summary
     arp_packet.cpp/.h                  # ARP-specific summary
     ipv6_packet.cpp/.h                 # IPv6-specific summary (header only)
+  fuzz/
+    fuzz_*.c                          # one libFuzzer harness per parser
+    standalone_driver.c                # plain main() fallback when Clang/libFuzzer isn't available
+    corpus/<parser>/*.bin               # seed corpora, replayed as regression tests every push
 ```
 
 ## Requirements
 
 - Linux (or WSL)
 - CMake ≥ 3.20
-- A C11 / C++17 toolchain (GCC or Clang)
+- A C11 / C++17 toolchain (GCC or Clang) — Clang is only required for real fuzzing (`-DENABLE_LIBFUZZER=ON`)
 
 ## Building
 
@@ -72,6 +86,64 @@ src/
 cmake -B out
 cmake --build out
 ```
+
+## BPF capture filters
+
+`-f "<expression>"` compiles a small subset of `pcap-filter(7)` syntax straight to classic BPF
+bytecode and attaches it to the capture socket with `SO_ATTACH_FILTER` — the kernel drops non-matching
+frames itself, before they're ever copied into this process:
+
+```
+primitive := 'tcp' | 'udp' | 'icmp' | 'ip' | 'ip6' | 'arp'
+           | ['src'|'dst'] 'host' A.B.C.D
+           | ['src'|'dst'] 'port' NUM
+           | ['src'|'dst'] 'net' A.B.C.D '/' PREFIXLEN
+expr      := primitive (('and'|'&&'|'or'|'||') primitive)*   # 'not'/'!' and '(' ')' also work
+```
+
+e.g. `-f "tcp and (port 80 or port 443)"`, `-f "host 10.0.0.5 and not icmp"`.
+
+The compiler (`src/c/capfilter.c`) is a textbook three-stage pipeline: a hand-written lexer, a
+recursive-descent parser building an AST, and a codegen pass that walks the AST once, emitting BPF
+instructions with classic *backpatching* for short-circuit `and`/`or`/`not` (each node compiles to code
+that either falls through on true or jumps on false; the jump targets get filled in once the
+surrounding context — literally the next instruction's address — is known). `port N` reproduces the
+same trick real `tcpdump`-generated filters use to reach a variable-offset TCP/UDP header: `BPF_MSH`
+loads the IPv4 header's IHL nibble into the X register, then `BPF_IND` indexes off it.
+
+It's deliberately a subset: primitives must be joined with an explicit `and`/`or` (no implicit
+juxtaposition like real `tcpdump`'s `"tcp port 80"`), and `host`/`net` only match IPv4 — which mirrors
+what this analyzer itself parses past Ethernet (see the IPv6 caveat above). `src/tests/test_capfilter.c`
+checks the generated bytecode against `src/tests/bpf_interp.c`, a ~100-line reference BPF interpreter
+written just for the tests, so the whole thing is verified without needing root or a real socket.
+
+## Fuzzing
+
+Every parser gets a `LLVMFuzzerTestOneInput` harness in `src/fuzz/` (`fuzz_eth.c`, `fuzz_arp.c`,
+`fuzz_ip.c`, `fuzz_ipv6.c`, `fuzz_tcp_udp.c`) — they're an obvious fuzzing target because every parser
+is a pure function of `(const uint8_t* data, uint32_t length)` with no side effects, no I/O, and (per
+`ip_parser.c`'s bounds checks, which this whole exercise was built to double-check) careful-looking
+length validation before every read.
+
+Two ways to run them, because a real libFuzzer binary needs Clang:
+
+- **Everywhere (GCC included):** each harness also links against `standalone_driver.c`, a plain
+  `main()` that replays files given on argv. CMake wires this up as `fuzz_<name>_replay`, registered as
+  an ordinary `ctest` test that replays `src/fuzz/corpus/<name>/*.bin` — so it runs under ASan/UBSan in
+  the existing CI matrix on every push, no new dependency. This catches *regressions*, not new bugs.
+- **Real fuzzing (Clang only):** `cmake -B out -DCMAKE_C_COMPILER=clang -DENABLE_LIBFUZZER=ON` builds
+  `fuzz_<name>` binaries with `-fsanitize=fuzzer,address,undefined`. Run one directly:
+
+  ```bash
+  ./out/src/fuzz/fuzz_ip -max_total_time=60 src/fuzz/corpus/ip
+  ```
+
+  CI's `fuzz-smoke` job does exactly this for all five targets, 30 seconds each, on every push, and
+  uploads any crashing input it finds as a build artifact.
+
+Seed corpora (`src/fuzz/corpus/`) are small hand-built valid/near-valid frames (see
+`generate_seed_corpus.c` in that directory) rather than empty — mutating from a header that already
+passes the length/version checks reaches far more code than mutating from nothing.
 
 ## Usage
 

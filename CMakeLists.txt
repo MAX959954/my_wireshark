@@ -35,6 +35,18 @@ target_include_directories(wireshark_parsers PUBLIC src)
 
 target_compile_options(wireshark_parsers PRIVATE -Wall -Wextra)
 
+# BPF filter compiler ("tcp port 443" -> classic BPF bytecode for
+# SO_ATTACH_FILTER). Kept out of wireshark_parsers because it pulls in
+# <linux/filter.h> - a kernel ABI header, not a "pure" dependency-free
+# parser - and because raw_socket.c is the only other Linux-specific
+# consumer.
+add_library(wireshark_filter STATIC
+    src/c/capfilter.c
+    src/c/capfilter.h)
+
+target_include_directories(wireshark_filter PUBLIC src)
+target_compile_options(wireshark_filter PRIVATE -Wall -Wextra)
+
 # C++ presentation layer: turns parsed headers into human-readable summary
 # lines. Built as a library (same reasoning as wireshark_parsers above) so
 # main.cpp and test_capture_pipeline.cpp link the exact same object code -
@@ -69,12 +81,15 @@ add_executable(my_wireshark
     src/c/raw_socket.h)
 
 target_include_directories(my_wireshark PRIVATE src)
-target_link_libraries(my_wireshark PRIVATE wireshark_presentation)
+target_link_libraries(my_wireshark PRIVATE wireshark_presentation wireshark_filter)
 
 target_compile_options(my_wireshark PRIVATE
     $<$<COMPILE_LANGUAGE:C>:-Wall -Wextra>
     $<$<COMPILE_LANGUAGE:CXX>:-Wall -Wextra>
 )
 
+option(ENABLE_LIBFUZZER "Also build real libFuzzer binaries for src/fuzz/ (needs Clang)" OFF)
+
 enable_testing()
 add_subdirectory(src/tests)
+add_subdirectory(src/fuzz)
