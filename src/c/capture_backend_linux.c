@@ -138,9 +138,24 @@ static int run_impl(const char* device_name, const char* bpf_filter,
         }
     }
 
-    g_active_ctx = ctx; // теперь Ctrl+C знает, что стопить
-    // ставим свой обработчик,
+    /*
+    Обработчик ставим ДО g_active_ctx = ctx. Если сделать наоборот, в
+    узком окне между присвоением и signal() SIGINT ловит ещё старый
+    обработчик (обычно завершает процесс без нашей очистки — fclose,
+    снятие promiscuous). В этом порядке худший случай — SIGINT в
+    окне, пока g_active_ctx ещё NULL, просто ничего не делает
+    (request_stop_impl увидит NULL и не найдёт что стопить), и это
+    безопасно: пользователь нажмёт Ctrl+C ещё раз.
+    */
     void (*previous_sigint_handler)(int) = signal(SIGINT, on_sigint);
+    if (previous_sigint_handler == SIG_ERR) {
+        // signal() не сказал, что было раньше — восстанавливать нечего.
+        // SIG_DFL — единственное безопасное для повторной установки значение
+        // (в отличие от SIG_ERR, который сам по себе не валидный обработчик).
+        perror("signal(SIGINT)");
+        previous_sigint_handler = SIG_DFL;
+    }
+    g_active_ctx = ctx; // теперь Ctrl+C знает, что стопить
 
     /*
     буфер не на стеке (64 КБ на стеке — рискованно), а в статической
@@ -154,7 +169,7 @@ static int run_impl(const char* device_name, const char* bpf_filter,
         uint32_t ts_seconds = 0;
         uint32_t ts_microseconds = 0;
         int n = raw_socket_recv(ctx, buf, sizeof(buf), &ts_seconds, &ts_microseconds);
-        if (n == 0) {
+        if (n == RAW_SOCKET_STOPPED) {
             break; /* stop requested: clean shutdown */
         }
         if (n < 0) {
@@ -182,9 +197,14 @@ static int run_impl(const char* device_name, const char* bpf_filter,
 
     signal(SIGINT, previous_sigint_handler); // вернуть прежний обработчик
     g_active_ctx = NULL; // больше ничего активного
-     
+
     if (pcap_file != NULL) {  // флашит буфер, дописывает файл
-        fclose(pcap_file);
+        if (fclose(pcap_file) != 0) {
+            // fclose — это единственный момент, когда буферизованные fwrite
+            // реально уходят на диск; ENOSPC/EIO вылезет только здесь
+            perror("fclose");
+            result = -1;
+        }
     }
     raw_socket_close(ctx); // close(fd) + free
     return result;

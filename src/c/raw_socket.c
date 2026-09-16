@@ -21,7 +21,9 @@
 struct raw_socket_ctx {
     int fd; // файловый дескриптор сокета
     atomic_int stop_requested;  // флаг остановки, атомарный
-}; 
+    char device_name[RAW_SOCKET_NAME_LEN]; // нужно, чтобы снять promiscuous при закрытии
+    int promisc_set_by_us; // 1, если это мы включили IFF_PROMISC (и должны его снять)
+};
 
 int raw_socket_list_devices(raw_socket_device_t* output, int max_devices) {
     if (output == NULL || max_devices == 0) {
@@ -117,10 +119,13 @@ raw_socket_ctx_t* raw_socket_open(const char* device_name) {
     критично.
     */
 
+    int promisc_set_by_us = 0;
     if (!(ifr.ifr_flags & IFF_PROMISC)) {
         ifr.ifr_flags |= IFF_PROMISC; // добавить бит "promiscuous"
-        if (ioctl(fd, SIOCSIFFLAGS, &ifr) == -1) { // записать обратно 
+        if (ioctl(fd, SIOCSIFFLAGS, &ifr) == -1) { // записать обратно
             perror("ioctl(SIOCSIFFLAGS) - promiscuous mode unavailable");
+        } else {
+            promisc_set_by_us = 1; // это мы включили — значит нам и выключать при close
         }
     }
 
@@ -152,6 +157,9 @@ raw_socket_ctx_t* raw_socket_open(const char* device_name) {
 
     ctx->fd = fd;
     atomic_init(&ctx->stop_requested, 0);
+    strncpy(ctx->device_name, device_name, RAW_SOCKET_NAME_LEN - 1);
+    ctx->device_name[RAW_SOCKET_NAME_LEN - 1] = '\0';
+    ctx->promisc_set_by_us = promisc_set_by_us;
     return ctx;
 }
 
@@ -164,7 +172,7 @@ int raw_socket_recv(raw_socket_ctx_t* ctx, uint8_t* buf, uint32_t buf_len,
 
     for (;;) {
         if (atomic_load(&ctx->stop_requested)) {
-            return 0; //// 0 = "запрошена остановка", чистое завершение
+            return RAW_SOCKET_STOPPED; // отдельный код — не путать с валидным нулевым кадром
         }
         ssize_t n = recv(ctx->fd, buf, buf_len, 0);
         if (n == -1) {
@@ -208,6 +216,24 @@ void  raw_socket_close(raw_socket_ctx_t* ctx) {
     if (ctx == NULL) {
         return;
     }
+
+    if (ctx->promisc_set_by_us) {
+        // симметрично включению: снять IFF_PROMISC, который выставили сами,
+        // иначе интерфейс останется в promiscuous и после выхода из программы
+        struct ifreq ifr;
+        memset(&ifr, 0, sizeof(ifr));
+        strncpy(ifr.ifr_name, ctx->device_name, IFNAMSIZ - 1);
+
+        if (ioctl(ctx->fd, SIOCGIFFLAGS, &ifr) == -1) {
+            perror("ioctl(SIOCGIFFLAGS) - failed to read flags while disabling promiscuous mode");
+        } else {
+            ifr.ifr_flags &= ~IFF_PROMISC;
+            if (ioctl(ctx->fd, SIOCSIFFLAGS, &ifr) == -1) {
+                perror("ioctl(SIOCSIFFLAGS) - failed to disable promiscuous mode");
+            }
+        }
+    }
+
     close(ctx->fd);
     free(ctx);
 }

@@ -51,7 +51,14 @@ typedef struct raw_socket_ctx raw_socket_ctx_t;
 // открыть сокет на интерфейсе
 raw_socket_ctx_t* raw_socket_open(const char* device_name);
 
-//принять один кадр (блокирующе)
+// Отдельный код возврата raw_socket_recv() для "запрошена остановка" —
+// не пересекается с длиной кадра (>= 0, 0 — валидный нулевой кадр) и с -1 (ошибка)
+#define RAW_SOCKET_STOPPED (-2)
+
+//принять один кадр (блокирующе).
+// Возврат: >= 0 — длина кадра в байтах (0 — легитимный нулевой кадр,
+// не признак остановки); -1 — ошибка recv(); RAW_SOCKET_STOPPED —
+// запрошена остановка через raw_socket_request_stop().
 int raw_socket_recv(raw_socket_ctx_t* ctx, uint8_t* buf, uint32_t buf_len,
     uint32_t* out_ts_seconds, uint32_t* out_ts_microseconds);
 
