@@ -3,27 +3,82 @@
 #include <arpa/inet.h>
 #include <errno.h>
 #include <ifaddrs.h>
+#include <linux/filter.h>
 #include <linux/if_ether.h>
 #include <linux/if_packet.h>
 #include <linux/sockios.h>
 #include <net/if.h>
 #include <netinet/in.h>
+#include <poll.h>
 #include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/ioctl.h>
+#include <sys/mman.h>
 #include <sys/socket.h>
 #include <sys/time.h>
 #include <sys/types.h>
 #include <unistd.h>
+
+/*
+PACKET_MMAP / TPACKET_V3 — zero-copy ring buffer capture.
+
+Проблема с "один recv() на пакет": каждый вызов — это переход user/kernel,
+а на кадр он один. При интересном pps (десятки-сотни тысяч пакетов в
+секунду) это становится потолком: время уходит не на разбор пакетов, а на
+сами syscall'ы и на копирование каждого кадра ядром в наш буфер по одному.
+
+PACKET_MMAP решает это иначе: ядро и процесс мапят (mmap) один и тот же
+кусок памяти — "кольцо" из последовательных "блоков" (block). Ядро само
+складывает туда пришедшие кадры (без обращения к нам), а как только блок
+заполнился или истёк tp_retire_blk_tov (наш прежний таймаут 200мс),
+помечает его как готовый (TP_STATUS_USER) и, если мы спали в poll(),
+будит нас. Мы читаем из готового блока сколько угодно кадров без единого
+syscall на кадр, а когда блок вычитан — отдаём его обратно ядру
+(TP_STATUS_KERNEL) одной записью в память. Копирование из блока в буфер
+вызывающего (raw_socket_recv's 'buf') остаётся — так API этого модуля не
+меняется для всех вызывающих (capture_backend_linux.c, тесты), — но
+исчезает копирование "ядро -> сокет-буфер -> наш буфер" на КАЖДЫЙ пакет;
+осталась только одна копия "ring -> buf", и ноль syscall'ов, пока в кольце
+есть непрочитанные кадры.
+
+TPACKET_V3 (а не V1/V2) выбран потому, что кадры в блоке идут вплотную
+друг за другом переменной длины (через tp_next_offset), а не в
+фиксированных слотах — меньше потерь места на padding, и ядро само решает,
+когда закрыть блок (по заполнению или по таймауту), а не блокируется, пока
+слот не освободится.
+*/
+
+#define RS_RING_BLOCK_SIZE (1u << 20) /* 1 MiB на блок; кратно странице и frame_size */
+#define RS_RING_BLOCK_NR   8u          /* 8 блоков => 8 MiB кольцо суммарно */
+#define RS_RING_FRAME_SIZE 2048u        /* используется только для расчёта tp_frame_nr */
+#define RS_RING_RETIRE_TOV_MS 200u       /* как долго блок ждёт заполнения перед тем как закрыться пустым/частичным - та же гранулярность, что раньше давал SO_RCVTIMEO, чтобы Ctrl+C реагировал так же быстро */
 
 struct raw_socket_ctx {
     int fd; // файловый дескриптор сокета
     atomic_int stop_requested;  // флаг остановки, атомарный
     char device_name[RAW_SOCKET_NAME_LEN]; // нужно, чтобы снять promiscuous при закрытии
     int promisc_set_by_us; // 1, если это мы включили IFF_PROMISC (и должны его снять)
+
+    uint8_t* ring;      // mmap'нутая память кольца целиком (все блоки подряд)
+    size_t ring_size;    // = block_size * block_nr, нужен для munmap
+    unsigned int block_size;
+    unsigned int block_nr;
+
+    // Курсор чтения: какой блок сейчас читаем и сколько пакетов из него уже
+    // отдали наверх. cur_pkt_idx == 0 означает "этот блок ещё не начат" -
+    // тогда сначала проверяем его block_status, а не просто грузим следующий
+    // пакет.
+    unsigned int cur_block;
+    unsigned int cur_pkt_idx;
+    unsigned int cur_pkt_offset;  // байтовое смещение следующего tpacket3_hdr внутри блока
+    unsigned int cur_num_pkts;    // сколько пакетов всего в текущем блоке (кэш bh1.num_pkts)
 };
+
+static uint8_t* rs_block_at(raw_socket_ctx_t* ctx, unsigned int index) {
+    return ctx->ring + (size_t)index * ctx->block_size;
+}
 
 int raw_socket_list_devices(raw_socket_device_t* output, int max_devices) {
     if (output == NULL || max_devices == 0) {
@@ -129,20 +184,35 @@ raw_socket_ctx_t* raw_socket_open(const char* device_name) {
         }
     }
 
-    //Таймаут на приём
+    // TPACKET_V3: переключаем сокет с "обычного" AF_PACKET на режим
+    // кольцевого буфера (см. большой комментарий про PACKET_MMAP выше).
+    int tpacket_version = TPACKET_V3;
+    if (setsockopt(fd, SOL_PACKET, PACKET_VERSION, &tpacket_version, sizeof(tpacket_version)) == -1) {
+        perror("setsockopt(PACKET_VERSION, TPACKET_V3)");
+        close(fd);
+        return NULL;
+    }
 
-    /*
-    recv блокирующий — без таймаута он висел бы вечно, ожидая пакет
-    , и не замечал бы флаг
-    stop_requested. С SO_RCVTIMEO recv сам возвращается с
-    EAGAIN каждые 200 мс → цикл проверяет флаг
-    → максимум 200 мс задержки
-    */
-    struct timeval tv;
-    tv.tv_sec = 0;
-    tv.tv_usec = 200000; 
-    if (setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv)) == -1) {
-        perror("setsockopt(SO_RCVTIMEO)");
+    struct tpacket_req3 req;
+    memset(&req, 0, sizeof(req));
+    req.tp_block_size = RS_RING_BLOCK_SIZE;
+    req.tp_frame_size = RS_RING_FRAME_SIZE;
+    req.tp_block_nr = RS_RING_BLOCK_NR;
+    req.tp_frame_nr = (RS_RING_BLOCK_SIZE / RS_RING_FRAME_SIZE) * RS_RING_BLOCK_NR;
+    req.tp_retire_blk_tov = RS_RING_RETIRE_TOV_MS;
+
+    // Просим ядро выделить и разметить кольцо под этот сокет. После этого
+    // вызова каждый recv() был бы избыточен - кадры уже льются в кольцо.
+    if (setsockopt(fd, SOL_PACKET, PACKET_RX_RING, &req, sizeof(req)) == -1) {
+        perror("setsockopt(PACKET_RX_RING)");
+        close(fd);
+        return NULL;
+    }
+
+    size_t ring_size = (size_t)req.tp_block_size * req.tp_block_nr;
+    void* ring = mmap(NULL, ring_size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    if (ring == MAP_FAILED) {
+        perror("mmap(PACKET_RX_RING)");
         close(fd);
         return NULL;
     }
@@ -151,6 +221,7 @@ raw_socket_ctx_t* raw_socket_open(const char* device_name) {
     raw_socket_ctx_t* ctx = malloc(sizeof(raw_socket_ctx_t));
     if (ctx == NULL) {
         perror("malloc");
+        munmap(ring, ring_size);
         close(fd);
         return NULL;
     }
@@ -160,6 +231,14 @@ raw_socket_ctx_t* raw_socket_open(const char* device_name) {
     strncpy(ctx->device_name, device_name, RAW_SOCKET_NAME_LEN - 1);
     ctx->device_name[RAW_SOCKET_NAME_LEN - 1] = '\0';
     ctx->promisc_set_by_us = promisc_set_by_us;
+    ctx->ring = ring;
+    ctx->ring_size = ring_size;
+    ctx->block_size = req.tp_block_size;
+    ctx->block_nr = req.tp_block_nr;
+    ctx->cur_block = 0;
+    ctx->cur_pkt_idx = 0;
+    ctx->cur_pkt_offset = 0;
+    ctx->cur_num_pkts = 0;
     return ctx;
 }
 
@@ -174,35 +253,84 @@ int raw_socket_recv(raw_socket_ctx_t* ctx, uint8_t* buf, uint32_t buf_len,
         if (atomic_load(&ctx->stop_requested)) {
             return RAW_SOCKET_STOPPED; // отдельный код — не путать с валидным нулевым кадром
         }
-        ssize_t n = recv(ctx->fd, buf, buf_len, 0);
-        if (n == -1) {
-            if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {
-                continue; // таймаут 200мс или прерывание сигналом — не ошибка, крутимся дальше
-            } 
-            perror("recv");
-            return -1;
+
+        struct tpacket_block_desc* bd = (struct tpacket_block_desc*)rs_block_at(ctx, ctx->cur_block);
+
+        if (ctx->cur_pkt_idx == 0) {
+            // Ещё не начинали читать этот блок - сначала убедиться, что он
+            // вообще принадлежит нам (TP_STATUS_USER), а не всё ещё
+            // заполняется ядром.
+            if (!(bd->hdr.bh1.block_status & TP_STATUS_USER)) {
+                // poll() вместо recv()-таймаута: спим, пока ядро либо не
+                // закроет текущий блок (заполнением или по
+                // tp_retire_blk_tov), либо не истечёт наш собственный
+                // таймаут — тогда возвращаемся наверх и снова проверяем
+                // stop_requested, как раньше делал EAGAIN каждые 200мс.
+                struct pollfd pfd;
+                pfd.fd = ctx->fd;
+                pfd.events = POLLIN;
+                pfd.revents = 0;
+                int rc = poll(&pfd, 1, (int)RS_RING_RETIRE_TOV_MS);
+                if (rc < 0 && errno != EINTR) {
+                    perror("poll");
+                    return -1;
+                }
+                continue;
+            }
+
+            ctx->cur_num_pkts = bd->hdr.bh1.num_pkts;
+            ctx->cur_pkt_offset = bd->hdr.bh1.offset_to_first_pkt;
+
+            if (ctx->cur_num_pkts == 0) {
+                // Блок закрылся по таймауту без единого пакета (idle
+                // interface) - вернуть его ядру и перейти к следующему.
+                bd->hdr.bh1.block_status = TP_STATUS_KERNEL;
+                ctx->cur_block = (ctx->cur_block + 1) % ctx->block_nr;
+                continue;
+            }
         }
 
-        /*
-        SIOCGSTAMP спрашивает у ядра, когда именно этот кадр был принят сетевой картой — точнее, чем
-        время «сейчас», т.к. между приёмом и обработкой есть задержка. Если ядро метку не дало —
-        берём текущее время как приближение.
-        */
-        struct timeval tv;
-        if (ioctl(ctx->fd, SIOCGSTAMP, &tv) == -1) {
-            gettimeofday(&tv, NULL);
-        }
+        struct tpacket3_hdr* hdr = (struct tpacket3_hdr*)((uint8_t*)bd + ctx->cur_pkt_offset);
+        const uint8_t* frame = (const uint8_t*)hdr + hdr->tp_mac;
+        uint32_t frame_len = hdr->tp_snaplen;
+        uint32_t copy_len = frame_len < buf_len ? frame_len : buf_len;
+        memcpy(buf, frame, copy_len);
 
         if (out_ts_seconds != NULL) {
-            *out_ts_seconds = (uint32_t)tv.tv_sec;
+            *out_ts_seconds = hdr->tp_sec;
         }
-
         if (out_ts_microseconds != NULL) {
-            *out_ts_microseconds = (uint32_t)tv.tv_usec;
+            // Метка времени тут - от самого ядра/NIC на момент приёма
+            // именно этого кадра (per-packet), точнее, чем прежний
+            // ioctl(SIOCGSTAMP), который спрашивал "а когда пришёл
+            // последний кадр на сокете вообще" уже после recv().
+            *out_ts_microseconds = hdr->tp_nsec / 1000;
         }
 
-        return (int)n;
-    };
+        ctx->cur_pkt_idx++;
+        if (ctx->cur_pkt_idx >= ctx->cur_num_pkts) {
+            // Дочитали блок целиком - отдать его обратно ядру и перейти
+            // к следующему по кольцу.
+            bd->hdr.bh1.block_status = TP_STATUS_KERNEL;
+            ctx->cur_block = (ctx->cur_block + 1) % ctx->block_nr;
+            ctx->cur_pkt_idx = 0;
+        } else {
+            ctx->cur_pkt_offset += hdr->tp_next_offset;
+        }
+
+        return (int)copy_len;
+    }
+}
+
+int raw_socket_attach_filter(raw_socket_ctx_t* ctx, const struct sock_fprog* prog) {
+    if (ctx == NULL || prog == NULL) {
+        return -1;
+    }
+    if (setsockopt(ctx->fd, SOL_SOCKET, SO_ATTACH_FILTER, prog, sizeof(*prog)) == -1) {
+        perror("setsockopt(SO_ATTACH_FILTER)");
+        return -1;
+    }
+    return 0;
 }
 
 void raw_socket_request_stop(raw_socket_ctx_t* ctx) {
@@ -234,6 +362,7 @@ void  raw_socket_close(raw_socket_ctx_t* ctx) {
         }
     }
 
+    munmap(ctx->ring, ctx->ring_size);
     close(ctx->fd);
     free(ctx);
 }

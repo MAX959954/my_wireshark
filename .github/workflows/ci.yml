@@ -42,3 +42,51 @@ jobs:
           ASAN_OPTIONS: detect_leaks=1
           UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
         run: ctest --output-on-failure
+
+  # Runs the real libFuzzer binaries (src/fuzz/), not just the seed-corpus
+  # replay that build-and-test above already covers via ctest. This is a
+  # bounded fuzzing *session*, not just a replay: -max_total_time actually
+  # mutates inputs looking for new crashes, so a regression a plain replay
+  # wouldn't catch (a new code path the existing corpus doesn't happen to
+  # exercise) still has a real, if limited, chance of being found on every
+  # push. Separate job because it needs Clang, not the GCC the matrix
+  # above builds with.
+  fuzz-smoke:
+    name: fuzz-smoke (libFuzzer, 30s/target)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Clang
+        run: sudo apt-get update && sudo apt-get install -y clang
+
+      - name: Configure
+        run: >
+          cmake -S . -B build
+          -DCMAKE_BUILD_TYPE=Debug
+          -DCMAKE_C_COMPILER=clang
+          -DCMAKE_CXX_COMPILER=clang++
+          -DENABLE_LIBFUZZER=ON
+
+      - name: Build
+        run: cmake --build build --parallel
+
+      - name: Fuzz each target for 30s
+        working-directory: build/src/fuzz
+        run: |
+          set -e
+          for target in eth arp ip ipv6 tcp_udp; do
+            echo "::group::fuzz_$target"
+            mkdir -p "corpus_out_$target"
+            ./"fuzz_$target" -max_total_time=30 -close_fd_mask=3 \
+              "corpus_out_$target" "${{ github.workspace }}/src/fuzz/corpus/$target"
+            echo "::endgroup::"
+          done
+
+      - name: Upload any new crashing/interesting inputs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-artifacts
+          path: build/src/fuzz/crash-*
+          if-no-files-found: ignore
