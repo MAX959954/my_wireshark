@@ -9,9 +9,9 @@ static void parses_valid_arp_request(void) {
         0x06, 0x04,                         /* hardware_addr_len, protocol_addr_len */
         0x00, 0x01,                         /* opcode = request */
         0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff, /* sender_mac */
-        192, 168, 1, 1,                     /* sender_ip */
+        192,  168,  1,    1,                /* sender_ip */
         0x00, 0x00, 0x00, 0x00, 0x00, 0x00, /* target_mac (unknown in a request) */
-        192, 168, 1, 2,                     /* target_ip */
+        192,  168,  1,    2,                /* target_ip */
     };
 
     arp_header_t hdr;
@@ -38,9 +38,7 @@ static void rejects_buffer_shorter_than_header(void) {
 static void rejects_non_ethernet_hardware_type(void) {
     uint8_t data[ARP_HEADER_LEN] = {
         0x00, 0x06, /* hardware_type = 6 (IEEE 802 Networks), not Ethernet */
-        0x08, 0x00,
-        0x06, 0x04,
-        0x00, 0x01,
+        0x08, 0x00, 0x06, 0x04, 0x00, 0x01,
     };
     arp_header_t hdr;
     TEST_ASSERT(arp_parse(data, sizeof(data), &hdr) == -1);
@@ -48,10 +46,8 @@ static void rejects_non_ethernet_hardware_type(void) {
 
 static void rejects_non_ipv4_protocol_type(void) {
     uint8_t data[ARP_HEADER_LEN] = {
-        0x00, 0x01,
-        0x86, 0xdd, /* protocol_type = IPv6, not IPv4 */
-        0x06, 0x04,
-        0x00, 0x01,
+        0x00, 0x01, 0x86, 0xdd, /* protocol_type = IPv6, not IPv4 */
+        0x06, 0x04, 0x00, 0x01,
     };
     arp_header_t hdr;
     TEST_ASSERT(arp_parse(data, sizeof(data), &hdr) == -1);

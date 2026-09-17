@@ -35,16 +35,28 @@ int main(int argc, char** argv) {
             perror(argv[i]);
             return 1;
         }
-        if (fseek(f, 0, SEEK_END) != 0) { perror("fseek"); fclose(f); return 1; }
+        if (fseek(f, 0, SEEK_END) != 0) {
+            perror("fseek");
+            fclose(f);
+            return 1;
+        }
         long len = ftell(f);
-        if (len < 0 || fseek(f, 0, SEEK_SET) != 0) { perror("ftell/fseek"); fclose(f); return 1; }
+        if (len < 0 || fseek(f, 0, SEEK_SET) != 0) {
+            perror("ftell/fseek");
+            fclose(f);
+            return 1;
+        }
 
         /* malloc(1) for the zero-length case: passing size 0 to
            LLVMFuzzerTestOneInput is legal and worth covering (empty
            capture buffer), but a NULL data pointer is not something a
            real libFuzzer run would ever pass. */
         uint8_t* buf = malloc(len > 0 ? (size_t)len : 1);
-        if (buf == NULL) { fprintf(stderr, "out of memory\n"); fclose(f); return 1; }
+        if (buf == NULL) {
+            fprintf(stderr, "out of memory\n");
+            fclose(f);
+            return 1;
+        }
 
         size_t n = fread(buf, 1, (size_t)len, f);
         fclose(f);

@@ -22,58 +22,62 @@
 #include <unistd.h>
 
 /*
-PACKET_MMAP / TPACKET_V3 — zero-copy ring buffer capture.
+PACKET_MMAP / TPACKET_V3 - zero-copy ring buffer capture.
 
-Проблема с "один recv() на пакет": каждый вызов — это переход user/kernel,
-а на кадр он один. При интересном pps (десятки-сотни тысяч пакетов в
-секунду) это становится потолком: время уходит не на разбор пакетов, а на
-сами syscall'ы и на копирование каждого кадра ядром в наш буфер по одному.
+The problem with "one recv() per packet": each call is a user/kernel
+transition, and there's one per frame. At any interesting packet rate
+(tens to hundreds of thousands of pps), that becomes the bottleneck -
+time goes into syscalls and per-frame copies rather than into parsing.
 
-PACKET_MMAP решает это иначе: ядро и процесс мапят (mmap) один и тот же
-кусок памяти — "кольцо" из последовательных "блоков" (block). Ядро само
-складывает туда пришедшие кадры (без обращения к нам), а как только блок
-заполнился или истёк tp_retire_blk_tov (наш прежний таймаут 200мс),
-помечает его как готовый (TP_STATUS_USER) и, если мы спали в poll(),
-будит нас. Мы читаем из готового блока сколько угодно кадров без единого
-syscall на кадр, а когда блок вычитан — отдаём его обратно ядру
-(TP_STATUS_KERNEL) одной записью в память. Копирование из блока в буфер
-вызывающего (raw_socket_recv's 'buf') остаётся — так API этого модуля не
-меняется для всех вызывающих (capture_backend_linux.c, тесты), — но
-исчезает копирование "ядро -> сокет-буфер -> наш буфер" на КАЖДЫЙ пакет;
-осталась только одна копия "ring -> buf", и ноль syscall'ов, пока в кольце
-есть непрочитанные кадры.
+PACKET_MMAP solves this differently: the kernel and the process mmap the
+same block of memory - a ring of consecutive "blocks". The kernel fills
+it with incoming frames on its own (no syscall involved), and once a
+block fills up or tp_retire_blk_tov (our timeout, 200ms) expires, marks
+it TP_STATUS_USER and wakes us if we're asleep in poll(). We then drain
+as many frames as we like from that block with zero syscalls, and hand it
+back to the kernel (TP_STATUS_KERNEL) with a single memory write once
+we're done. The copy from the ring into the caller's buffer
+(raw_socket_recv's 'buf') still happens, to keep this module's API
+unchanged for its callers (capture_backend_linux.c, tests) - but the
+"kernel -> socket buffer -> our buffer" copy on EVERY packet is gone;
+only the "ring -> buf" copy remains, with zero syscalls as long as the
+ring has unread frames.
 
-TPACKET_V3 (а не V1/V2) выбран потому, что кадры в блоке идут вплотную
-друг за другом переменной длины (через tp_next_offset), а не в
-фиксированных слотах — меньше потерь места на padding, и ядро само решает,
-когда закрыть блок (по заполнению или по таймауту), а не блокируется, пока
-слот не освободится.
+TPACKET_V3 (rather than V1/V2) is used because frames within a block are
+packed back-to-back at variable length (via tp_next_offset) instead of
+fixed-size slots - less padding waste, and the kernel decides on its own
+when to close a block (full, or timed out) instead of blocking until a
+slot frees up.
 */
 
-#define RS_RING_BLOCK_SIZE (1u << 20) /* 1 MiB на блок; кратно странице и frame_size */
-#define RS_RING_BLOCK_NR   8u          /* 8 блоков => 8 MiB кольцо суммарно */
-#define RS_RING_FRAME_SIZE 2048u        /* используется только для расчёта tp_frame_nr */
-#define RS_RING_RETIRE_TOV_MS 200u       /* как долго блок ждёт заполнения перед тем как закрыться пустым/частичным - та же гранулярность, что раньше давал SO_RCVTIMEO, чтобы Ctrl+C реагировал так же быстро */
+#define RS_RING_BLOCK_SIZE \
+    (1u << 20)                   /* 1 MiB per block; a multiple of the page size and frame_size */
+#define RS_RING_BLOCK_NR 8u      /* 8 blocks => 8 MiB ring in total */
+#define RS_RING_FRAME_SIZE 2048u /* only used to size tp_frame_nr */
+#define RS_RING_RETIRE_TOV_MS                                                              \
+    200u /* how long a block waits to fill before closing empty/partial - same granularity \
+            SO_RCVTIMEO used to give, so Ctrl+C reacts just as fast */
 
 struct raw_socket_ctx {
-    int fd; // файловый дескриптор сокета
-    atomic_int stop_requested;  // флаг остановки, атомарный
-    char device_name[RAW_SOCKET_NAME_LEN]; // нужно, чтобы снять promiscuous при закрытии
-    int promisc_set_by_us; // 1, если это мы включили IFF_PROMISC (и должны его снять)
+    int fd;
+    atomic_int stop_requested;
+    char device_name[RAW_SOCKET_NAME_LEN]; /* needed to clear promiscuous mode on close */
+    int promisc_set_by_us; /* 1 if we're the ones who turned on IFF_PROMISC (and must turn it off)
+                            */
 
-    uint8_t* ring;      // mmap'нутая память кольца целиком (все блоки подряд)
-    size_t ring_size;    // = block_size * block_nr, нужен для munmap
+    uint8_t* ring;    /* the whole mmap'd ring (all blocks, contiguous) */
+    size_t ring_size; /* = block_size * block_nr, needed for munmap */
     unsigned int block_size;
     unsigned int block_nr;
 
-    // Курсор чтения: какой блок сейчас читаем и сколько пакетов из него уже
-    // отдали наверх. cur_pkt_idx == 0 означает "этот блок ещё не начат" -
-    // тогда сначала проверяем его block_status, а не просто грузим следующий
-    // пакет.
+    /* Read cursor: which block we're reading and how many of its packets
+       we've already handed out. cur_pkt_idx == 0 means "haven't started
+       this block yet" - so check its block_status first instead of just
+       loading the next packet. */
     unsigned int cur_block;
     unsigned int cur_pkt_idx;
-    unsigned int cur_pkt_offset;  // байтовое смещение следующего tpacket3_hdr внутри блока
-    unsigned int cur_num_pkts;    // сколько пакетов всего в текущем блоке (кэш bh1.num_pkts)
+    unsigned int cur_pkt_offset; /* byte offset of the next tpacket3_hdr within the block */
+    unsigned int cur_num_pkts;   /* total packets in the current block (cached bh1.num_pkts) */
 };
 
 static uint8_t* rs_block_at(raw_socket_ctx_t* ctx, unsigned int index) {
@@ -85,8 +89,8 @@ int raw_socket_list_devices(raw_socket_device_t* output, int max_devices) {
         return -1;
     }
 
-    //getifaddrs() — POSIX-функция, возвращает
-    // связный список всех сетевых адресов системы. Не требует прав.
+    /* getifaddrs() is a POSIX call returning a linked list of every
+       network address on the system; it needs no privileges. */
     struct ifaddrs* addr = NULL;
     if (getifaddrs(&addr) == -1) {
         perror("getifaddrs");
@@ -99,15 +103,12 @@ int raw_socket_list_devices(raw_socket_device_t* output, int max_devices) {
             continue;
         }
 
-        /*
-        Проход по списку. Проблема: getifaddrs возвращает по записи на каждый адрес, а не на
-        интерфейс. У eth0 может быть IPv4-адрес, IPv6-адрес, MAC — три записи с именем "eth0".
-        Отсюда дедупликация
-        */
-
+        /* getifaddrs returns one entry per address, not per interface -
+           eth0 can have an IPv4 address, an IPv6 address, and a MAC, each
+           a separate entry named "eth0". Hence the dedup below. */
         int duplicate = 0;
         for (int j = 0; j < count; j++) {
-            if (strcmp(output[j].name, i->ifa_name) == 0){
+            if (strcmp(output[j].name, i->ifa_name) == 0) {
                 duplicate = 1;
                 break;
             }
@@ -116,7 +117,6 @@ int raw_socket_list_devices(raw_socket_device_t* output, int max_devices) {
             continue;
         }
 
-        //Линейный поиск по уже добавленным именам — O(n²), но n ≤ 32, неважно.
         strncpy(output[count].name, i->ifa_name, RAW_SOCKET_NAME_LEN - 1);
         output[count].name[RAW_SOCKET_NAME_LEN - 1] = '\0';
         count++;
@@ -126,29 +126,25 @@ int raw_socket_list_devices(raw_socket_device_t* output, int max_devices) {
     return count;
 }
 
-
 raw_socket_ctx_t* raw_socket_open(const char* device_name) {
     if (device_name == NULL) {
         return NULL;
     }
 
-    //htons (host-to-network short) — третий аргумент должен быть
-    // в сетевом порядке байт. ETH_P_ALL = 0x0003; на little-endian
-    // машине без htons ядро получило бы 0x0300
+    /* htons (host-to-network short): the third argument must be in
+       network byte order. ETH_P_ALL = 0x0003; without htons, a
+       little-endian machine would send the kernel 0x0300 instead. */
     int fd = socket(AF_PACKET, SOCK_RAW, htons(ETH_P_ALL));
     if (fd == -1) {
         perror("socket(AF_PACKET, SOCK_RAW)");
         return NULL;
     }
 
-    //Привязать к одному интерфейсу
-    /*
-    Без этого сокет ловил бы трафик со всех интерфейсов сразу.
-    SO_BINDTODEVICE ограничивает
-    выбранным (eth0). + 1 — включаем \0 в длину.
-    */
+    /* Bind to a single interface - without this the socket would receive
+       traffic from every interface at once. +1 includes the trailing
+       '\0' in the length. */
     if (setsockopt(fd, SOL_SOCKET, SO_BINDTODEVICE, device_name,
-        (socklen_t)(strlen(device_name) + 1)) == -1) {
+                   (socklen_t)(strlen(device_name) + 1)) == -1) {
         perror("setsockopt(SO_BINDTODEVICE)");
         close(fd);
         return NULL;
@@ -158,36 +154,31 @@ raw_socket_ctx_t* raw_socket_open(const char* device_name) {
     memset(&ifr, 0, sizeof(ifr));
     strncpy(ifr.ifr_name, device_name, IFNAMSIZ - 1);
 
-    // прочитать текущие флаги интерфейса
     if (ioctl(fd, SIOCGIFFLAGS, &ifr) == -1) {
         perror("ioctl(SIOCGIFFLAGS)");
         close(fd);
         return NULL;
     }
 
-    /*
-    Promiscuous mode — «неразборчивый режим». Обычно сетевая карта
-    отбрасывает кадры, где MAC
-    назначения не её (и не broadcast/multicast). В promiscuous она
-    отдаёт ядру всё, что физически
-    услышала — весь трафик сегмента, включая чужой. Для сниффера
-    критично.
-    */
-
+    /* Promiscuous mode: normally a NIC drops frames not addressed to its
+       own MAC (or broadcast/multicast). In promiscuous mode it hands the
+       kernel everything it physically hears on the segment, including
+       other hosts' traffic - essential for a sniffer. */
     int promisc_set_by_us = 0;
     if (!(ifr.ifr_flags & IFF_PROMISC)) {
-        ifr.ifr_flags |= IFF_PROMISC; // добавить бит "promiscuous"
-        if (ioctl(fd, SIOCSIFFLAGS, &ifr) == -1) { // записать обратно
+        ifr.ifr_flags |= IFF_PROMISC;
+        if (ioctl(fd, SIOCSIFFLAGS, &ifr) == -1) {
             perror("ioctl(SIOCSIFFLAGS) - promiscuous mode unavailable");
         } else {
-            promisc_set_by_us = 1; // это мы включили — значит нам и выключать при close
+            promisc_set_by_us = 1; /* we turned it on, so we're responsible for turning it off */
         }
     }
 
-    // TPACKET_V3: переключаем сокет с "обычного" AF_PACKET на режим
-    // кольцевого буфера (см. большой комментарий про PACKET_MMAP выше).
+    /* Switch the socket from "plain" AF_PACKET to ring-buffer mode - see
+       the PACKET_MMAP comment above. */
     int tpacket_version = TPACKET_V3;
-    if (setsockopt(fd, SOL_PACKET, PACKET_VERSION, &tpacket_version, sizeof(tpacket_version)) == -1) {
+    if (setsockopt(fd, SOL_PACKET, PACKET_VERSION, &tpacket_version, sizeof(tpacket_version)) ==
+        -1) {
         perror("setsockopt(PACKET_VERSION, TPACKET_V3)");
         close(fd);
         return NULL;
@@ -201,8 +192,8 @@ raw_socket_ctx_t* raw_socket_open(const char* device_name) {
     req.tp_frame_nr = (RS_RING_BLOCK_SIZE / RS_RING_FRAME_SIZE) * RS_RING_BLOCK_NR;
     req.tp_retire_blk_tov = RS_RING_RETIRE_TOV_MS;
 
-    // Просим ядро выделить и разметить кольцо под этот сокет. После этого
-    // вызова каждый recv() был бы избыточен - кадры уже льются в кольцо.
+    /* Ask the kernel to allocate and lay out the ring for this socket.
+       After this call, frames are already flowing into the ring. */
     if (setsockopt(fd, SOL_PACKET, PACKET_RX_RING, &req, sizeof(req)) == -1) {
         perror("setsockopt(PACKET_RX_RING)");
         close(fd);
@@ -217,7 +208,6 @@ raw_socket_ctx_t* raw_socket_open(const char* device_name) {
         return NULL;
     }
 
-    //Выделить контекст
     raw_socket_ctx_t* ctx = malloc(sizeof(raw_socket_ctx_t));
     if (ctx == NULL) {
         perror("malloc");
@@ -242,30 +232,31 @@ raw_socket_ctx_t* raw_socket_open(const char* device_name) {
     return ctx;
 }
 
-int raw_socket_recv(raw_socket_ctx_t* ctx, uint8_t* buf, uint32_t buf_len,
-    uint32_t  * out_ts_seconds , uint32_t  * out_ts_microseconds ) {
-
+int raw_socket_recv(raw_socket_ctx_t* ctx, uint8_t* buf, uint32_t buf_len, uint32_t* out_ts_seconds,
+                    uint32_t* out_ts_microseconds) {
     if (ctx == NULL || buf == NULL) {
         return -1;
     }
 
     for (;;) {
         if (atomic_load(&ctx->stop_requested)) {
-            return RAW_SOCKET_STOPPED; // отдельный код — не путать с валидным нулевым кадром
+            return RAW_SOCKET_STOPPED; /* distinct code - not to be confused with a valid
+                                          zero-length frame */
         }
 
-        struct tpacket_block_desc* bd = (struct tpacket_block_desc*)rs_block_at(ctx, ctx->cur_block);
+        struct tpacket_block_desc* bd =
+            (struct tpacket_block_desc*)rs_block_at(ctx, ctx->cur_block);
 
         if (ctx->cur_pkt_idx == 0) {
-            // Ещё не начинали читать этот блок - сначала убедиться, что он
-            // вообще принадлежит нам (TP_STATUS_USER), а не всё ещё
-            // заполняется ядром.
+            /* Haven't started reading this block yet - first confirm it
+               actually belongs to us (TP_STATUS_USER) rather than still
+               being filled by the kernel. */
             if (!(bd->hdr.bh1.block_status & TP_STATUS_USER)) {
-                // poll() вместо recv()-таймаута: спим, пока ядро либо не
-                // закроет текущий блок (заполнением или по
-                // tp_retire_blk_tov), либо не истечёт наш собственный
-                // таймаут — тогда возвращаемся наверх и снова проверяем
-                // stop_requested, как раньше делал EAGAIN каждые 200мс.
+                /* poll() replaces the old recv()-timeout: sleep until the
+                   kernel either closes the current block (full, or via
+                   tp_retire_blk_tov) or our own timeout expires, then loop
+                   back up to re-check stop_requested - the same role the
+                   old 200ms EAGAIN used to play. */
                 struct pollfd pfd;
                 pfd.fd = ctx->fd;
                 pfd.events = POLLIN;
@@ -282,8 +273,8 @@ int raw_socket_recv(raw_socket_ctx_t* ctx, uint8_t* buf, uint32_t buf_len,
             ctx->cur_pkt_offset = bd->hdr.bh1.offset_to_first_pkt;
 
             if (ctx->cur_num_pkts == 0) {
-                // Блок закрылся по таймауту без единого пакета (idle
-                // interface) - вернуть его ядру и перейти к следующему.
+                /* Block closed on timeout with no packets at all (idle
+                   interface) - hand it back to the kernel and move on. */
                 bd->hdr.bh1.block_status = TP_STATUS_KERNEL;
                 ctx->cur_block = (ctx->cur_block + 1) % ctx->block_nr;
                 continue;
@@ -300,17 +291,17 @@ int raw_socket_recv(raw_socket_ctx_t* ctx, uint8_t* buf, uint32_t buf_len,
             *out_ts_seconds = hdr->tp_sec;
         }
         if (out_ts_microseconds != NULL) {
-            // Метка времени тут - от самого ядра/NIC на момент приёма
-            // именно этого кадра (per-packet), точнее, чем прежний
-            // ioctl(SIOCGSTAMP), который спрашивал "а когда пришёл
-            // последний кадр на сокете вообще" уже после recv().
+            /* This timestamp is the kernel/NIC's own, taken when this
+               specific frame arrived (per-packet) - more accurate than
+               the old ioctl(SIOCGSTAMP), which asked "when did the last
+               frame arrive on this socket" after the fact, post-recv(). */
             *out_ts_microseconds = hdr->tp_nsec / 1000;
         }
 
         ctx->cur_pkt_idx++;
         if (ctx->cur_pkt_idx >= ctx->cur_num_pkts) {
-            // Дочитали блок целиком - отдать его обратно ядру и перейти
-            // к следующему по кольцу.
+            /* Block fully drained - hand it back to the kernel and move
+               to the next one in the ring. */
             bd->hdr.bh1.block_status = TP_STATUS_KERNEL;
             ctx->cur_block = (ctx->cur_block + 1) % ctx->block_nr;
             ctx->cur_pkt_idx = 0;
@@ -340,14 +331,15 @@ void raw_socket_request_stop(raw_socket_ctx_t* ctx) {
     atomic_store(&ctx->stop_requested, 1);
 }
 
-void  raw_socket_close(raw_socket_ctx_t* ctx) {
+void raw_socket_close(raw_socket_ctx_t* ctx) {
     if (ctx == NULL) {
         return;
     }
 
     if (ctx->promisc_set_by_us) {
-        // симметрично включению: снять IFF_PROMISC, который выставили сами,
-        // иначе интерфейс останется в promiscuous и после выхода из программы
+        /* Symmetric with enabling it: clear the IFF_PROMISC bit we set
+           ourselves, otherwise the interface stays promiscuous after the
+           program exits. */
         struct ifreq ifr;
         memset(&ifr, 0, sizeof(ifr));
         strncpy(ifr.ifr_name, ctx->device_name, IFNAMSIZ - 1);
@@ -366,5 +358,3 @@ void  raw_socket_close(raw_socket_ctx_t* ctx) {
     close(ctx->fd);
     free(ctx);
 }
-
-

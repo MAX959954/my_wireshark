@@ -6,15 +6,16 @@
 
 namespace {
 
-    void print_usage(const char* argv0) {
-        std::cerr << "Usage: " << argv0 << " [-i <iface>] [-f \"<bpf filter>\"] [-w <out.pcap>]\n"
-            "  -i  capture device name (skips the interactive interface prompt)\n"
-            "  -f  BPF filter, e.g. \"tcp port 443\"\n"
-            "  -w  write captured packets to this .pcap file\n"
-            "With no -i, falls back to the interactive interface picker.\n";
-    }
-
+void print_usage(const char* argv0) {
+    std::cerr << "Usage: " << argv0
+              << " [-i <iface>] [-f \"<bpf filter>\"] [-w <out.pcap>]\n"
+                 "  -i  capture device name (skips the interactive interface prompt)\n"
+                 "  -f  BPF filter, e.g. \"tcp port 443\"\n"
+                 "  -w  write captured packets to this .pcap file\n"
+                 "With no -i, falls back to the interactive interface picker.\n";
 }
+
+}  // namespace
 
 int main(int argc, char** argv) {
     std::string cli_iface;
@@ -27,14 +28,11 @@ int main(int argc, char** argv) {
         if (arg == "-i" && i + 1 < argc) {
             cli_iface = argv[++i];
             have_iface = true;
-        }
-        else if (arg == "-f" && i + 1 < argc) {
+        } else if (arg == "-f" && i + 1 < argc) {
             cli_filter = argv[++i];
-        }
-        else if (arg == "-w" && i + 1 < argc) {
+        } else if (arg == "-w" && i + 1 < argc) {
             cli_pcap_path = argv[++i];
-        }
-        else {
+        } else {
             std::cerr << "Unknown or incomplete argument: " << arg << "\n";
             print_usage(argv[0]);
             return 1;
@@ -46,7 +44,7 @@ int main(int argc, char** argv) {
 
     if (device_count <= 0) {
         std::cerr << "No capture devices found. Raw packet capture requires "
-            "CAP_NET_RAW (run as root, or `sudo setcap cap_net_raw+ep <binary>`).\n";
+                     "CAP_NET_RAW (run as root, or `sudo setcap cap_net_raw+ep <binary>`).\n";
         return 1;
     }
 
@@ -56,8 +54,7 @@ int main(int argc, char** argv) {
 
     if (have_iface) {
         device_name = cli_iface;
-    }
-    else {
+    } else {
         std::cout << "Available interfaces : \n";
         for (int i = 0; i < device_count; i++) {
             std::cout << "  [" << i << "] " << devices[i].name << "\n";
@@ -84,7 +81,7 @@ int main(int argc, char** argv) {
     std::cout << "Capturing on " << device_name << " (Ctrl+C to stop)...\n";
     PacketPrinterContext ctx(std::cout);
     if (capture_backend_run(device_name.c_str(), filter.c_str(), pcap_path.c_str(),
-        packet_printer_callback, &ctx) != 0) {
+                            packet_printer_callback, &ctx) != 0) {
         std::cerr << "Capturing failed\n";
         return 1;
     }

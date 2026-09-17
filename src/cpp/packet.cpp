@@ -3,10 +3,12 @@
 #include <iomanip>
 
 Packet::Packet(uint32_t ts_seconds, uint32_t ts_microseconds, uint32_t capture_length,
-    const eth_header_t& eth, std::optional<ip_header_t> ip)
-    : ts_seconds_(ts_seconds), ts_microseconds_(ts_microseconds),
-      capture_length_(capture_length), eth_(eth), ip_(ip) {
-}
+               const eth_header_t& eth, std::optional<ip_header_t> ip)
+    : ts_seconds_(ts_seconds),
+      ts_microseconds_(ts_microseconds),
+      capture_length_(capture_length),
+      eth_(eth),
+      ip_(ip) {}
 
 void Packet::print(std::ostream& os) const {
     char src_mac[ETH_MAC_STR_LEN];
@@ -15,8 +17,7 @@ void Packet::print(std::ostream& os) const {
     eth_mac_to_str(eth_.dst_mac, dst_mac);
 
     os << ts_seconds_ << "." << std::setw(6) << std::setfill('0') << ts_microseconds_
-       << " len=" << capture_length_
-       << " " << src_mac << " > " << dst_mac;
+       << " len=" << capture_length_ << " " << src_mac << " > " << dst_mac;
 
     if (eth_.has_vlan) {
         os << " vlan=" << ETH_VLAN_ID(eth_.vlan_tci);

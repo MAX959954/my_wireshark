@@ -4,19 +4,11 @@
 #include <stdint.h>
 
 /*
-Один маленький файл, реализующий интернет-контрольную сумму
-(RFC 1071) — тот самый алгоритм, которым
-проверяются на целостность заголовок IPv4, сегмент TCP и датаграмма
-UDP.
-
-Контрольная сумма нужна, чтобы поймать случайную порчу битов
-(шум на линии, битая память роутера).
-Требования: считаться быстро, на любом железе, инкрементально пересчитываться при изменении одного
-поля (роутер уменьшает TTL — не пересчитывать же всё заново).
-
-Один алгоритм на три протокола. IPv4, TCP, UDP
-используют одну и ту же интернет-чексумму — код
-написан один раз.
+The Internet checksum (RFC 1071) - the algorithm used to verify the
+integrity of the IPv4 header, a TCP segment, and a UDP datagram. It only
+catches accidental bit corruption (line noise, a bad router NIC), not
+deliberate tampering. IPv4, TCP, and UDP all use the same algorithm, so
+it's implemented once here and shared.
 */
 
 #ifdef __cplusplus
@@ -24,9 +16,10 @@ extern "C" {
 #endif
 
 /*
-принимает предыдущую сумму, возвращает новую — можно вызывать цепочкой;
-не сворачивает перенос — это делается один раз в конце;
-нечётный хвостовой байт дополняется нулём справа.
+accumulates a running sum over 'data'; 'sum' is the previous partial sum
+so calls can be chained (e.g. pseudo-header then segment). Does not fold
+the carry - that happens once, at the end, in checksum_verify(). An odd
+trailing byte is padded with a zero low byte.
 */
 uint32_t checksum_partial(const uint8_t* data, uint32_t len, uint32_t sum);
 
