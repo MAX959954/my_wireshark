@@ -5,15 +5,18 @@
 #include <string.h>
 
 #define ETHERTYPE_IPV4 0x0800
-#define ETHERTYPE_ARP  0x0806
+#define ETHERTYPE_ARP 0x0806
 
-static void put16(uint8_t* p, uint16_t v) { p[0] = (uint8_t)(v >> 8); p[1] = (uint8_t)v; }
+static void put16(uint8_t* p, uint16_t v) {
+    p[0] = (uint8_t)(v >> 8);
+    p[1] = (uint8_t)v;
+}
 
 /* Builds a 14-byte Ethernet + 20-byte IPv4 (no options) + optional 4-byte
    TCP/UDP port pair (src/dst, that's all this filter's codegen ever looks
    at) frame into 'buf' (must be >= 38 bytes). Returns the frame length. */
 static uint32_t build_frame(uint8_t* buf, uint8_t ip_proto, const uint8_t src_ip[4],
-    const uint8_t dst_ip[4], uint16_t src_port, uint16_t dst_port) {
+                            const uint8_t dst_ip[4], uint16_t src_port, uint16_t dst_port) {
     memset(buf, 0, 38);
     put16(buf + 12, ETHERTYPE_IPV4);
     buf[14] = 0x45; /* version=4, ihl=5 (20-byte header, no options) */
@@ -31,13 +34,13 @@ static uint32_t build_arp_frame(uint8_t* buf) {
     return 14;
 }
 
-static const uint8_t IP_A[4] = { 10, 0, 0, 5 };
-static const uint8_t IP_B[4] = { 10, 0, 1, 7 };
-static const uint8_t IP_C[4] = { 192, 168, 1, 1 };
+static const uint8_t IP_A[4] = {10, 0, 0, 5};
+static const uint8_t IP_B[4] = {10, 0, 1, 7};
+static const uint8_t IP_C[4] = {192, 168, 1, 1};
 
 static int accepts(const char* expr, const uint8_t* pkt, uint32_t len) {
     struct sock_fprog prog;
-    char err[128] = { 0 };
+    char err[128] = {0};
     int rc = capfilter_compile(expr, &prog, err, sizeof(err));
     TEST_ASSERT(rc == 0);
     if (rc != 0) {
@@ -95,13 +98,13 @@ static void host_and_net_match_ip_addresses(void) {
     uint8_t pkt[38];
     build_frame(pkt, 6, IP_A, IP_C, 1, 1);
 
-    TEST_ASSERT(accepts("host 10.0.0.5", pkt, sizeof(pkt)));   /* matches src */
+    TEST_ASSERT(accepts("host 10.0.0.5", pkt, sizeof(pkt)));    /* matches src */
     TEST_ASSERT(accepts("host 192.168.1.1", pkt, sizeof(pkt))); /* matches dst */
     TEST_ASSERT(!accepts("host 10.0.1.7", pkt, sizeof(pkt)));
     TEST_ASSERT(accepts("src host 10.0.0.5", pkt, sizeof(pkt)));
     TEST_ASSERT(!accepts("dst host 10.0.0.5", pkt, sizeof(pkt)));
 
-    TEST_ASSERT(accepts("net 10.0.0.0/24", pkt, sizeof(pkt)));   /* src is in 10.0.0.0/24 */
+    TEST_ASSERT(accepts("net 10.0.0.0/24", pkt, sizeof(pkt))); /* src is in 10.0.0.0/24 */
     TEST_ASSERT(!accepts("net 10.0.1.0/24", pkt, sizeof(pkt)));
     TEST_ASSERT(accepts("dst net 192.168.1.0/24", pkt, sizeof(pkt)));
 }
@@ -123,7 +126,8 @@ static void boolean_combinators_compose(void) {
     build_arp_frame(arp_pkt);
     TEST_ASSERT(accepts("ip or arp", tcp_443, sizeof(tcp_443)));
     TEST_ASSERT(accepts("ip or arp", arp_pkt, sizeof(arp_pkt)));
-    TEST_ASSERT(!accepts("ip and arp", arp_pkt, sizeof(arp_pkt))); /* mutually exclusive by ethertype */
+    TEST_ASSERT(
+        !accepts("ip and arp", arp_pkt, sizeof(arp_pkt))); /* mutually exclusive by ethertype */
 }
 
 static void compile_error_cases_report_failure(void) {

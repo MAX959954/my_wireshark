@@ -18,7 +18,8 @@ int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
        any out-of-bounds read) is that the payload pointer it hands back,
        if any, actually lands inside that same buffer. */
     if (payload != NULL) {
-        if (payload < data || payload > data + size || payload_len > (uint32_t)(data + size - payload)) {
+        if (payload < data || payload > data + size ||
+            payload_len > (uint32_t)(data + size - payload)) {
             __builtin_trap();
         }
     }

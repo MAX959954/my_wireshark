@@ -16,7 +16,7 @@ static int load_u(const uint8_t* pkt, uint32_t pkt_len, uint32_t off, int width,
 
 uint32_t bpf_interp_run(const struct sock_fprog* prog, const uint8_t* pkt, uint32_t pkt_len) {
     if (prog == NULL || prog->filter == NULL || prog->len == 0) {
-        return 0xFFFFu; /* пустая программа = capfilter_compile's "принять всё" */
+        return 0xFFFFu; /* an empty program is capfilter_compile's "accept everything" */
     }
 
     uint32_t a = 0, x = 0;
@@ -25,7 +25,7 @@ uint32_t bpf_interp_run(const struct sock_fprog* prog, const uint8_t* pkt, uint3
 
     while (pc < prog->len) {
         if (++steps > 10000) {
-            return 0; /* защита от неожиданно зациклившегося байткода в тесте */
+            return 0; /* guard against unexpectedly looping bytecode in a test */
         }
         const struct sock_filter* f = &prog->filter[pc];
         uint16_t cls = BPF_CLASS(f->code);

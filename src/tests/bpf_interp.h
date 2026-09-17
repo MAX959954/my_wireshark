@@ -5,23 +5,23 @@
 #include <stdint.h>
 
 /*
-Крошечный интерпретатор классического BPF, только для тестов.
+A tiny classic-BPF interpreter, for tests only.
 
-Зачем он нужен, а не просто SO_ATTACH_FILTER в реальный сокет: тесты должны
-работать без root/CAP_NET_RAW и без живого сетевого интерфейса (см. CI:
-asan-ubsan job гоняет ctest без каких-либо привилегий). Интерпретируя
-байт-код руками по тем же правилам, что и ядро (см. Documentation/networking/
-filter.rst), можно проверить codegen на синтетических кадрах полностью
-изолированно от ядра — и заодно ещё раз "прочитать" то, что генерирует
-capfilter_compile, глазами независимой реализации.
+Why this exists instead of just SO_ATTACH_FILTER on a real socket: tests
+need to run without root/CAP_NET_RAW and without a live network interface
+(the asan-ubsan CI job runs ctest with no privileges at all). Interpreting
+the bytecode by hand, following the same rules as the kernel (see
+Documentation/networking/filter.rst), lets codegen be checked against
+synthetic frames fully isolated from the kernel - and doubles as an
+independent reading of what capfilter_compile actually generates.
 
-Поддерживает ровно то подмножество опкодов, что умеет генерировать
-capfilter.c: LD/LDX (W/H/B, ABS/IND/MSH), ALU AND K, JMP JEQ K, RET K.
+Supports exactly the opcode subset capfilter.c can generate: LD/LDX
+(W/H/B, ABS/IND/MSH), ALU AND K, JMP JEQ K, RET K.
 */
 
-/* Возвращает то же, что вернула бы программа в ядре: 0 = пакет отбрасывается,
-   >0 = пакет принимается (значение - "сколько байт пропустить наверх",
-   нам достаточно знать факт accept/reject). */
+/* Returns what the kernel would have returned: 0 = packet dropped, >0 =
+   packet accepted (the value is "how many bytes to pass up"; here it's
+   enough to know accept vs. reject). */
 uint32_t bpf_interp_run(const struct sock_fprog* prog, const uint8_t* pkt, uint32_t pkt_len);
 
 #endif

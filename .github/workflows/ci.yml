@@ -6,6 +6,20 @@ on:
   pull_request:
 
 jobs:
+  format:
+    name: clang-format
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install clang-format
+        run: sudo apt-get update && sudo apt-get install -y clang-format-15
+
+      - name: Check formatting
+        run: |
+          find src -name '*.c' -o -name '*.h' -o -name '*.cpp' \
+            | xargs clang-format-15 --dry-run --Werror
+
   build-and-test:
     name: ${{ matrix.name }}
     runs-on: ubuntu-latest

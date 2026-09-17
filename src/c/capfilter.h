@@ -6,21 +6,22 @@
 /*
 BPF (Berkeley Packet Filter)
 
-Крошечная виртуальная машина внутри ядра Linux. У неё есть регистр A
-(аккумулятор), регистр X, "память" M[0..15], и программа — массив
-инструкций фиксированного формата по 8 байт: { code, jt, jf, k }.
+A tiny virtual machine inside the Linux kernel. It has an accumulator
+register A, a register X, "memory" M[0..15], and a program - an array of
+fixed-format 8-byte instructions: { code, jt, jf, k }.
 
-  code — что делать (загрузить байт, сравнить, вернуть результат)
-  k    — операнд (смещение в пакете, константа для сравнения)
-  jt/jf — на сколько инструкций прыгнуть, если условие истинно/ложно
+  code  - what to do (load a byte, compare, return a result)
+  k     - the operand (an offset into the packet, a comparison constant)
+  jt/jf - how many instructions to jump if the condition is true/false
 
-Программа подаётся ядру через setsockopt(SO_ATTACH_FILTER). На каждый
-пришедший кадр ядро запускает эту программу; она смотрит на байты пакета
-и возвращает число — сколько байт пропустить наверх (0 = выбросить пакет).
-Фильтрация происходит в ядре, до копирования пакета в user space — именно
-поэтому "tcp port 443" не гоняет весь трафик через приложение.
+The program is handed to the kernel via setsockopt(SO_ATTACH_FILTER). On
+every incoming frame the kernel runs it; it looks at the packet's bytes
+and returns a number - how many bytes to pass up (0 = drop the packet).
+Filtering happens in the kernel, before the packet is copied into
+userspace - that's why "tcp port 443" doesn't route all traffic through
+the application.
 
-Поддерживаемый язык выражений (подмножество pcap-filter(7)):
+Supported expression language (a subset of pcap-filter(7)):
 
   primitive := 'tcp' | 'udp' | 'icmp' | 'ip' | 'ip6' | 'arp'
              | ['src'|'dst'] 'host' A.B.C.D
@@ -31,18 +32,17 @@ BPF (Berkeley Packet Filter)
   and_expr  := not_expr (('and'|'&&') not_expr)*
   not_expr  := ('not'|'!') not_expr | '(' expr ')' | primitive
 
-Отличие от полного pcap-filter: 'and'/'or' между примитивами обязательны
-(без неявного склеивания вида "tcp port 80"), и 'host'/'net' matching
-работает только для IPv4 (соответствует тому, что этот анализатор вообще
-умеет разбирать дальше Ethernet: см. README про IPv6 L4).
+Differences from full pcap-filter: 'and'/'or' between primitives are
+mandatory (no implicit juxtaposition like "tcp port 80"), and 'host'/
+'net' matching only works for IPv4 (matching what this analyzer parses
+past Ethernet in the first place - see the README's note on IPv6 L4).
 
-Компилятор устроен как классический трёхстадийный конвейер:
-lexer (строка -> токены) -> recursive-descent parser (токены -> AST) ->
-codegen (AST -> байт-код) с backpatching (классическая техника компиляции
-булевых выражений с коротким замыканием: каждый узел компилируется в код,
-который либо "проваливается" дальше при истине, либо прыгает при лжи, а
-конкретные адреса переходов достраиваются по мере того, как становится
-известно, куда именно надо прыгать).
+The compiler is a classic three-stage pipeline: lexer (string -> tokens)
+-> recursive-descent parser (tokens -> AST) -> codegen (AST -> bytecode)
+with backpatching (the classic technique for compiling short-circuit
+boolean expressions: each node compiles to code that either falls
+through on true or jumps on false, and the actual jump targets are
+filled in once it becomes known where they need to point).
 */
 
 #ifdef __cplusplus
@@ -50,24 +50,24 @@ extern "C" {
 #endif
 
 /*
-Компилирует 'expr' в *out. При успехе возвращает 0 и заполняет out->filter
-(в куче, освобождать через capfilter_free) и out->len. NULL или пустое
-выражение — не ошибка: даёт out->len == 0 / out->filter == NULL, что
-означает "пропускать каждый пакет" — в этом случае вызывающий код должен
-пропустить вызов SO_ATTACH_FILTER.
+Compiles 'expr' into *out. On success returns 0 and fills out->filter
+(heap-allocated, free with capfilter_free) and out->len. NULL or an empty
+expression is not an error: it yields out->len == 0 / out->filter ==
+NULL, meaning "pass every packet" - in that case the caller should skip
+the SO_ATTACH_FILTER call entirely.
 
-При синтаксической ошибке, неизвестном примитиве или слишком сложном
-выражении возвращает -1 и записывает человекочитаемую причину в 'err'
-(буфер размера 'err_len' байт; может быть NULL, если err_len == 0).
+On a syntax error, an unknown primitive, or an overly complex expression,
+returns -1 and writes a human-readable reason into 'err' (a buffer of
+'err_len' bytes; may be NULL if err_len == 0).
 */
 int capfilter_compile(const char* expr, struct sock_fprog* out, char* err, int err_len);
 
-/* Освобождает out->filter и обнуляет структуру. Безопасно для нулевой /
-   NULL-программы. */
+/* Frees out->filter and zeroes the struct. Safe on an empty / NULL
+   program. */
 void capfilter_free(struct sock_fprog* fprog);
 
-/* Для отладки: печатает программу по одной инструкции на строку в stdout,
-   в формате, сравнимом с `tcpdump -dd "<expr>"`. */
+/* For debugging: prints the program one instruction per line to stdout,
+   in a format comparable to `tcpdump -dd "<expr>"`. */
 void capfilter_print(const struct sock_fprog* fprog);
 
 #ifdef __cplusplus

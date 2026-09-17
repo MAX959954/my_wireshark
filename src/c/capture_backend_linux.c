@@ -1,4 +1,3 @@
-
 #include "capfilter.h"
 #include "capture_backend.h"
 #include "raw_socket.h"
@@ -8,57 +7,52 @@
 #include <string.h>
 
 typedef struct {
-    uint32_t magic_number; // 0xa1b2c3d4 — маркер "это pcap, время в микросекундах"
-    uint16_t version_major;  // 2 
-    uint16_t version_minor;  // 4 
-    int32_t  thiszone; // смещение таймзоны от UTC (0 = UTC)
-    uint32_t sigfigs; // точность меток времени (всегда 0 на практике)
-    uint32_t snaplen; // макс. сохранённая длина кадра
-    uint32_t network; // тип канального уровня: 1 = Ethernet
-} pcap_global_header_t;  // 24 байта, один раз в начале файла
+    uint32_t
+        magic_number; /* 0xa1b2c3d4 - marks "this is a pcap file, timestamps in microseconds" */
+    uint16_t version_major;
+    uint16_t version_minor;
+    int32_t thiszone;   /* timezone offset from UTC (0 = UTC) */
+    uint32_t sigfigs;   /* timestamp accuracy (always 0 in practice) */
+    uint32_t snaplen;   /* max stored frame length */
+    uint32_t network;   /* link-layer type: 1 = Ethernet */
+} pcap_global_header_t; /* 24 bytes, written once at the start of the file */
 
 typedef struct {
-    uint32_t ts_sec;  // секунды приёма
-    uint32_t ts_usec; // микросекунды
-    uint32_t incl_len;  // сколько байт кадра реально записано
-    uint32_t orig_len; // какой была реальная длина кадра на проводе
-} pcap_record_header_t;  // 16 байт, перед каждым пакетом
+    uint32_t ts_sec;
+    uint32_t ts_usec;
+    uint32_t incl_len;  /* how many bytes of the frame were actually captured */
+    uint32_t orig_len;  /* the frame's real length on the wire */
+} pcap_record_header_t; /* 16 bytes, written before every packet */
 
 #define PCAP_MAGIC_MICROSECONDS 0xa1b2c3d4u
-#define PCAP_LINKTYPE_ETHERNET  1u
-
-
+#define PCAP_LINKTYPE_ETHERNET 1u
 
 /*
-Проблема: Ctrl+C шлёт SIGINT, обработчик получает только
-номер сигнала — ни ctx, ни argc, ничего. А
-чтобы остановить захват, нужен указатель на активный
-raw_socket_ctx_t. Решение — положить его в
-файловую статическую переменную.
+Ctrl+C delivers SIGINT, and the handler only gets a signal number - no
+ctx, no argc, nothing. Stopping the capture needs a pointer to the active
+raw_socket_ctx_t, so it's kept in a file-scope static instead.
 */
 
-//volatile запрещает компилятору кешировать значение
-// в регистре, заставляет читать из памяти.
+/* volatile forbids the compiler from caching this in a register, forcing
+   every access to go through memory. */
 static raw_socket_ctx_t* volatile g_active_ctx = NULL;
 
 static void request_stop_impl(void) {
     raw_socket_ctx_t* ctx = g_active_ctx;
     if (ctx != NULL) {
-        raw_socket_request_stop(ctx); // async-signal-safe: внутри только atomic_store
+        raw_socket_request_stop(ctx); /* async-signal-safe: only does an atomic_store */
     }
 }
 
 static void on_sigint(int signum) {
-    (void)signum;  // явно "параметр не используется" — глушим предупреждение
+    (void)signum;
     request_stop_impl();
 }
 
-/*
-Чистый адаптер: зовёт raw_socket_list_devices, перекладывает
-raw_socket_device_t → capture_device_t.
-Разные типы у двух слоёв — намеренно, чтобы capture_backend.h
-не включал raw_socket.h
-*/
+/* Pure adapter: calls raw_socket_list_devices and copies
+   raw_socket_device_t into capture_device_t. The two layers use distinct
+   types on purpose, so capture_backend.h never has to include
+   raw_socket.h. */
 static int list_devices_impl(capture_device_t* output, int max_devices) {
     if (max_devices > CAPTURE_MAX_DEVICES) {
         max_devices = CAPTURE_MAX_DEVICES;
@@ -80,7 +74,6 @@ static int list_devices_impl(capture_device_t* output, int max_devices) {
     return count;
 }
 
-//записал ровно 1 элемент размера sizeof(hdr)». Иначе -1
 static int write_pcap_global_header(FILE* f) {
     pcap_global_header_t hdr;
     hdr.magic_number = PCAP_MAGIC_MICROSECONDS;
@@ -93,9 +86,8 @@ static int write_pcap_global_header(FILE* f) {
     return fwrite(&hdr, sizeof(hdr), 1, f) == 1 ? 0 : -1;
 }
 
-//записал ровно 1 элемент размера sizeof(hdr)». Иначе -1
-static int write_pcap_record(FILE* f, const uint8_t* data, uint32_t len,
-    uint32_t ts_seconds, uint32_t ts_microseconds) {
+static int write_pcap_record(FILE* f, const uint8_t* data, uint32_t len, uint32_t ts_seconds,
+                             uint32_t ts_microseconds) {
     pcap_record_header_t rec;
     rec.ts_sec = ts_seconds;
     rec.ts_usec = ts_microseconds;
@@ -110,10 +102,9 @@ static int write_pcap_record(FILE* f, const uint8_t* data, uint32_t len,
     return 0;
 }
 
-static int run_impl(const char* device_name, const char* bpf_filter,
-    const char* pcap_output_path, capture_packet_cb cb, void* user_data) {
-
-    struct sock_fprog filter_prog = { 0, NULL };
+static int run_impl(const char* device_name, const char* bpf_filter, const char* pcap_output_path,
+                    capture_packet_cb cb, void* user_data) {
+    struct sock_fprog filter_prog = {0, NULL};
     if (bpf_filter != NULL && bpf_filter[0] != 0) {
         char err[128];
         if (capfilter_compile(bpf_filter, &filter_prog, err, sizeof(err)) != 0) {
@@ -142,10 +133,10 @@ static int run_impl(const char* device_name, const char* bpf_filter,
 
     FILE* pcap_file = NULL;
     if (pcap_output_path != NULL && pcap_output_path[0] != 0) {
-        pcap_file = fopen(pcap_output_path, "wb"); // "wb" — бинарный режим (важно на Windows/WSL)
+        pcap_file = fopen(pcap_output_path, "wb"); /* "wb": binary mode matters on Windows/WSL */
         if (pcap_file == NULL) {
             perror("fopen");
-            raw_socket_close(ctx); // откат: закрыть уже открытый сокет
+            raw_socket_close(ctx);
             return -1;
         }
         if (write_pcap_global_header(pcap_file) != 0) {
@@ -157,30 +148,27 @@ static int run_impl(const char* device_name, const char* bpf_filter,
     }
 
     /*
-    Обработчик ставим ДО g_active_ctx = ctx. Если сделать наоборот, в
-    узком окне между присвоением и signal() SIGINT ловит ещё старый
-    обработчик (обычно завершает процесс без нашей очистки — fclose,
-    снятие promiscuous). В этом порядке худший случай — SIGINT в
-    окне, пока g_active_ctx ещё NULL, просто ничего не делает
-    (request_stop_impl увидит NULL и не найдёт что стопить), и это
-    безопасно: пользователь нажмёт Ctrl+C ещё раз.
+    The signal handler is installed BEFORE g_active_ctx = ctx. Doing it
+    the other way round leaves a window where SIGINT is still caught by
+    whatever handler was active before ours (usually terminating the
+    process without our cleanup - fclose, clearing promiscuous mode). In
+    this order, the worst case is a SIGINT landing in the brief window
+    where g_active_ctx is still NULL: request_stop_impl() sees NULL and
+    does nothing, which is safe - the user just presses Ctrl+C again.
     */
     void (*previous_sigint_handler)(int) = signal(SIGINT, on_sigint);
     if (previous_sigint_handler == SIG_ERR) {
-        // signal() не сказал, что было раньше — восстанавливать нечего.
-        // SIG_DFL — единственное безопасное для повторной установки значение
-        // (в отличие от SIG_ERR, который сам по себе не валидный обработчик).
+        /* signal() didn't tell us what the previous handler was, so there's
+           nothing to restore - SIG_DFL is the only value safe to install
+           unconditionally (unlike SIG_ERR, which isn't a valid handler). */
         perror("signal(SIGINT)");
         previous_sigint_handler = SIG_DFL;
     }
-    g_active_ctx = ctx; // теперь Ctrl+C знает, что стопить
+    g_active_ctx = ctx; /* Ctrl+C now knows what to stop */
 
-    /*
-    буфер не на стеке (64 КБ на стеке — рискованно), а в статической
-    памяти. Один на все вызовы. Ок,
-    пока run_impl не вызывают из двух потоков одновременно
-    (не вызывают)
-    */
+    /* Static rather than on the stack - 64 KiB would be a lot to risk
+       there. One shared buffer is fine as long as run_impl is never
+       called from two threads at once (it isn't). */
     static uint8_t buf[RAW_SOCKET_MAX_FRAME];
     int result = 0;
     for (;;) {
@@ -195,36 +183,30 @@ static int run_impl(const char* device_name, const char* bpf_filter,
             break;
         }
 
-        if (pcap_file != NULL && write_pcap_record(pcap_file, buf, (uint32_t)n,
-            ts_seconds, ts_microseconds) != 0) {
+        if (pcap_file != NULL &&
+            write_pcap_record(pcap_file, buf, (uint32_t)n, ts_seconds, ts_microseconds) != 0) {
             perror("fwrite");
             result = -1;
             break;
         }
 
-        // → on_packet → парсеры
+        /* Write-then-parse order is deliberate: the raw frame lands in
+           the .pcap file even if the parser trips over it afterward. */
         cb(buf, (uint32_t)n, ts_seconds, ts_microseconds, user_data);
     }
 
-    /*
-    Порядок на каждый пакет: сначала записать в файл, потом разобрать
-    и напечатать. Логично — в
-    .pcap попадёт сырой кадр, даже если парсер потом на нём
-    споткнётся.
-    */
+    signal(SIGINT, previous_sigint_handler);
+    g_active_ctx = NULL;
 
-    signal(SIGINT, previous_sigint_handler); // вернуть прежний обработчик
-    g_active_ctx = NULL; // больше ничего активного
-
-    if (pcap_file != NULL) {  // флашит буфер, дописывает файл
+    if (pcap_file != NULL) {
         if (fclose(pcap_file) != 0) {
-            // fclose — это единственный момент, когда буферизованные fwrite
-            // реально уходят на диск; ENOSPC/EIO вылезет только здесь
+            /* fclose is the only point where buffered fwrite data actually
+               reaches disk - ENOSPC/EIO only surfaces here. */
             perror("fclose");
             result = -1;
         }
     }
-    raw_socket_close(ctx); // close(fd) + free
+    raw_socket_close(ctx);
     return result;
 }
 
@@ -243,7 +225,7 @@ int capture_backend_list_devices(capture_device_t* output, int max_devices) {
 }
 
 int capture_backend_run(const char* device_name, const char* bpf_filter,
-    const char* pcap_output_path, capture_packet_cb cb, void* user_data) {
+                        const char* pcap_output_path, capture_packet_cb cb, void* user_data) {
     return capture_backend_get()->run(device_name, bpf_filter, pcap_output_path, cb, user_data);
 }
 

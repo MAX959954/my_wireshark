@@ -12,7 +12,8 @@ int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
 
     int rc = ip_parse(data, (uint32_t)size, &header, &payload, &payload_len);
     if (rc == 0 && payload != NULL) {
-        if (payload < data || payload > data + size || payload_len > (uint32_t)(data + size - payload)) {
+        if (payload < data || payload > data + size ||
+            payload_len > (uint32_t)(data + size - payload)) {
             __builtin_trap();
         }
     }

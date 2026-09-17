@@ -29,8 +29,8 @@ static int fake_list_devices(capture_device_t* output, int max_devices) {
     return 1;
 }
 
-static int fake_run(const char* device_name, const char* bpf_filter,
-    const char* pcap_output_path, capture_packet_cb cb, void* user_data) {
+static int fake_run(const char* device_name, const char* bpf_filter, const char* pcap_output_path,
+                    capture_packet_cb cb, void* user_data) {
     (void)device_name;
     (void)bpf_filter;
     // Unlike capture_backend_linux.c, the fake backend doesn't write a
@@ -70,7 +70,7 @@ int capture_backend_list_devices(capture_device_t* output, int max_devices) {
 }
 
 int capture_backend_run(const char* device_name, const char* bpf_filter,
-    const char* pcap_output_path, capture_packet_cb cb, void* user_data) {
+                        const char* pcap_output_path, capture_packet_cb cb, void* user_data) {
     return capture_backend_get()->run(device_name, bpf_filter, pcap_output_path, cb, user_data);
 }
 

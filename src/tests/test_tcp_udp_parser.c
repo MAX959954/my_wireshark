@@ -5,6 +5,9 @@
 static const uint8_t SRC_IP[4] = {10, 0, 0, 1};
 static const uint8_t DST_IP[4] = {10, 0, 0, 2};
 
+static const uint8_t SRC_IP6[16] = {0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1};
+static const uint8_t DST_IP6[16] = {0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2};
+
 /* TCP SYN, src_port=8080 dst_port=80 seq=1 ack=0 data_offset=5 window=0x2000,
    checksum=0x5bff - correct for the IPv4 pseudo-header above. */
 static const uint8_t VALID_TCP[TCP_HEADER_MIN_LEN] = {
@@ -16,6 +19,20 @@ static const uint8_t VALID_TCP[TCP_HEADER_MIN_LEN] = {
    4-byte payload. */
 static const uint8_t VALID_UDP[UDP_HEADER_LEN + 4] = {
     0x30, 0x39, 0x00, 0x35, 0x00, 0x0c, 0x1d, 0xc8, 0xde, 0xad, 0xbe, 0xef,
+};
+
+/* Same TCP segment as VALID_TCP, but with the checksum recomputed over
+   the IPv6 pseudo-header for SRC_IP6/DST_IP6 (2001:db8::1 -> ::2)
+   instead of the IPv4 one. */
+static const uint8_t VALID_TCP_IPV6[TCP_HEADER_MIN_LEN] = {
+    0x1f, 0x90, 0x00, 0x50, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00,
+    0x00, 0x00, 0x50, 0x02, 0x20, 0x00, 0x14, 0x8d, 0x00, 0x00,
+};
+
+/* Same UDP datagram as VALID_UDP, checksum recomputed over the IPv6
+   pseudo-header for SRC_IP6/DST_IP6. */
+static const uint8_t VALID_UDP_IPV6[UDP_HEADER_LEN + 4] = {
+    0x30, 0x39, 0x00, 0x35, 0x00, 0x0c, 0xd6, 0x55, 0xde, 0xad, 0xbe, 0xef,
 };
 
 static void tcp_parse_reads_a_valid_header_with_no_options(void) {
@@ -33,7 +50,8 @@ static void tcp_parse_reads_a_valid_header_with_no_options(void) {
     TEST_ASSERT(hdr.data_offset == 5);
     TEST_ASSERT(hdr.flags == TCP_FLAG_SYN);
     TEST_ASSERT(hdr.window_size == 0x2000);
-    TEST_ASSERT(hdr.checksum_valid == 0); /* tcp_parse() never sets this - see tcp_verify_checksum() */
+    TEST_ASSERT(hdr.checksum_valid ==
+                0); /* tcp_parse() never sets this - see tcp_verify_checksum() */
     TEST_ASSERT(payload == VALID_TCP + TCP_HEADER_MIN_LEN);
     TEST_ASSERT(payload_len == 0);
 }
@@ -120,6 +138,40 @@ static void udp_verify_checksum_treats_a_zero_checksum_field_as_valid(void) {
     TEST_ASSERT(udp_verify_checksum(data, sizeof(data), SRC_IP, DST_IP) == 1);
 }
 
+static void tcp_verify_checksum_ipv6_accepts_a_correct_checksum(void) {
+    TEST_ASSERT(
+        tcp_verify_checksum_ipv6(VALID_TCP_IPV6, sizeof(VALID_TCP_IPV6), SRC_IP6, DST_IP6) == 1);
+}
+
+static void tcp_verify_checksum_ipv6_rejects_the_ipv4_checksum_for_the_same_bytes(void) {
+    /* Same segment bytes as VALID_TCP_IPV6 would need a different
+       checksum under IPv4's shorter pseudo-header - proves the two
+       pseudo-headers aren't accidentally interchangeable. */
+    TEST_ASSERT(tcp_verify_checksum_ipv6(VALID_TCP, sizeof(VALID_TCP), SRC_IP6, DST_IP6) == 0);
+}
+
+static void tcp_verify_checksum_ipv6_rejects_a_corrupted_segment(void) {
+    uint8_t data[TCP_HEADER_MIN_LEN];
+    memcpy(data, VALID_TCP_IPV6, sizeof(data));
+    data[14] = 0x30; /* window byte changed, checksum field left untouched */
+    TEST_ASSERT(tcp_verify_checksum_ipv6(data, sizeof(data), SRC_IP6, DST_IP6) == 0);
+}
+
+static void udp_verify_checksum_ipv6_accepts_a_correct_checksum(void) {
+    TEST_ASSERT(
+        udp_verify_checksum_ipv6(VALID_UDP_IPV6, sizeof(VALID_UDP_IPV6), SRC_IP6, DST_IP6) == 1);
+}
+
+static void udp_verify_checksum_ipv6_rejects_a_zero_checksum_field(void) {
+    /* RFC 2460 SS8.1: unlike IPv4, the UDP checksum is mandatory over
+       IPv6 - a zero field is not a valid "not computed" marker here. */
+    uint8_t data[sizeof(VALID_UDP_IPV6)];
+    memcpy(data, VALID_UDP_IPV6, sizeof(data));
+    data[6] = 0x00;
+    data[7] = 0x00;
+    TEST_ASSERT(udp_verify_checksum_ipv6(data, sizeof(data), SRC_IP6, DST_IP6) == 0);
+}
+
 int main(void) {
     TEST_RUN(tcp_parse_reads_a_valid_header_with_no_options);
     TEST_RUN(tcp_parse_rejects_buffer_shorter_than_min_header);
@@ -132,5 +184,10 @@ int main(void) {
     TEST_RUN(udp_parse_rejects_buffer_shorter_than_header);
     TEST_RUN(udp_verify_checksum_accepts_a_correct_checksum);
     TEST_RUN(udp_verify_checksum_treats_a_zero_checksum_field_as_valid);
+    TEST_RUN(tcp_verify_checksum_ipv6_accepts_a_correct_checksum);
+    TEST_RUN(tcp_verify_checksum_ipv6_rejects_the_ipv4_checksum_for_the_same_bytes);
+    TEST_RUN(tcp_verify_checksum_ipv6_rejects_a_corrupted_segment);
+    TEST_RUN(udp_verify_checksum_ipv6_accepts_a_correct_checksum);
+    TEST_RUN(udp_verify_checksum_ipv6_rejects_a_zero_checksum_field);
     TEST_MAIN_END();
 }

@@ -9,8 +9,8 @@ decode-and-print pipeline main.cpp runs per packet during live capture,
 factored out so it can be driven end-to-end (capture -> parse -> print)
 by a fake capture_backend_t in tests, without a real NIC.
 */
-void print_packet(std::ostream& os, const uint8_t* packet, uint32_t length,
-    uint32_t ts_seconds, uint32_t ts_microseconds, uint64_t packet_number);
+void print_packet(std::ostream& os, const uint8_t* packet, uint32_t length, uint32_t ts_seconds,
+                  uint32_t ts_microseconds, uint64_t packet_number);
 
 /*
 Adapts print_packet() to the capture_packet_cb ABI capture_backend_run()
@@ -25,5 +25,5 @@ struct PacketPrinterContext {
     uint64_t count = 0;
 };
 
-void packet_printer_callback(const uint8_t* packet, uint32_t length,
-    uint32_t ts_seconds, uint32_t ts_microseconds, void* user_data);
+void packet_printer_callback(const uint8_t* packet, uint32_t length, uint32_t ts_seconds,
+                             uint32_t ts_microseconds, void* user_data);
