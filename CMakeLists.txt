@@ -29,7 +29,11 @@ add_library(wireshark_parsers STATIC
     src/c/arp_parser.c
     src/c/arp_parser.h
     src/c/tcp_udp_parser.c
-    src/c/tcp_udp_parser.h)
+    src/c/tcp_udp_parser.h
+    src/c/icmp_parser.c
+    src/c/icmp_parser.h
+    src/c/dispfilter.c
+    src/c/dispfilter.h)
 
 target_include_directories(wireshark_parsers PUBLIC src)
 
@@ -61,6 +65,8 @@ add_library(wireshark_presentation STATIC
     src/cpp/udp_packet.h
     src/cpp/arp_packet.cpp
     src/cpp/arp_packet.h
+    src/cpp/icmp_packet.cpp
+    src/cpp/icmp_packet.h
     src/cpp/ipv6_packet.cpp
     src/cpp/ipv6_packet.h
     src/cpp/packet_printer.cpp
@@ -73,15 +79,19 @@ target_compile_options(wireshark_presentation PRIVATE -Wall -Wextra)
 # AF_PACKET-based capture (src/c/raw_socket.c, wrapped behind the
 # capture_backend_t interface in src/c/capture_backend.h/.c) needs only
 # CAP_NET_RAW, not a separate packet-capture driver/SDK like Npcap.
+find_package(Threads REQUIRED)
+
 add_executable(my_wireshark
     src/main.cpp
+    src/cpp/packet_queue.cpp
+    src/cpp/packet_queue.h
     src/c/capture_backend.h
     src/c/capture_backend_linux.c
     src/c/raw_socket.c
     src/c/raw_socket.h)
 
 target_include_directories(my_wireshark PRIVATE src)
-target_link_libraries(my_wireshark PRIVATE wireshark_presentation wireshark_filter)
+target_link_libraries(my_wireshark PRIVATE wireshark_presentation wireshark_filter Threads::Threads)
 
 target_compile_options(my_wireshark PRIVATE
     $<$<COMPILE_LANGUAGE:C>:-Wall -Wextra>

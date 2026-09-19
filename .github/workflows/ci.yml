@@ -89,7 +89,7 @@ jobs:
         working-directory: build/src/fuzz
         run: |
           set -e
-          for target in eth arp ip ipv6 tcp_udp; do
+          for target in eth arp ip ipv6 tcp_udp icmp; do
             echo "::group::fuzz_$target"
             mkdir -p "corpus_out_$target"
             ./"fuzz_$target" -max_total_time=30 -close_fd_mask=3 \
