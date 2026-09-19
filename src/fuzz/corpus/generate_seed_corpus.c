@@ -172,5 +172,21 @@ int main(void) {
         write_file("tcp_udp/empty.bin", NULL, 0);
     }
 
+    /* ---- icmp: 8-byte ICMPv4 echo request header ---- */
+    {
+        uint8_t echo_request[8] = {
+            0x08, 0x00,             /* type=echo request, code=0 */
+            0xf7, 0xfd,             /* checksum (correct for the rest of this message) */
+            0x00, 0x01, 0x00, 0x01, /* identifier=1, sequence=1 */
+        };
+        write_file("icmp/echo_request.bin", echo_request, sizeof(echo_request));
+
+        uint8_t truncated[4];
+        memcpy(truncated, echo_request, sizeof(truncated));
+        write_file("icmp/truncated.bin", truncated, sizeof(truncated));
+
+        write_file("icmp/empty.bin", NULL, 0);
+    }
+
     return 0;
 }

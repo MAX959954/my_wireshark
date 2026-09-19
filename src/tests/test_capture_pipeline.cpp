@@ -1,6 +1,7 @@
 #include "test_util.h"
 
 #include "c/capture_backend.h"
+#include "c/dispfilter.h"
 #include "cpp/packet_printer.h"
 #include "fake_capture_backend.h"
 
@@ -65,6 +66,16 @@ const uint8_t FRAME_TCP_IPV6[] = {
     0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x50, 0x02, 0x20, 0x00, 0x14, 0x8d, 0x00, 0x00,
 };
 
+// Ethernet + IPv4(10.0.0.1 -> 10.0.0.2, correct header checksum) + ICMP
+// echo request (id=1 seq=1, correct ICMPv4 checksum - same bytes
+// test_icmp_parser.c already proves are correct). Exercises the
+// IPv4 -> ICMP dispatch path (ip.protocol -> icmp_parse -> IcmpPacket).
+const uint8_t FRAME_ICMP[] = {
+    0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x08, 0x00,
+    0x45, 0x00, 0x00, 0x1c, 0x00, 0x00, 0x00, 0x00, 0x40, 0x01, 0x66, 0xdf, 10,   0,
+    0,    1,    10,   0,    0,    2,    0x08, 0x00, 0xf7, 0xfd, 0x00, 0x01, 0x00, 0x01,
+};
+
 void list_devices_reports_the_fake_device() {
     capture_device_t devices[CAPTURE_MAX_DEVICES];
     int count = capture_backend_list_devices(devices, CAPTURE_MAX_DEVICES);
@@ -80,15 +91,16 @@ void pipeline_decodes_and_prints_each_frame_kind() {
         {FRAME_UDP, sizeof(FRAME_UDP), 3000, 3},
         {FRAME_TRUNCATED, sizeof(FRAME_TRUNCATED), 4000, 4},
         {FRAME_TCP_IPV6, sizeof(FRAME_TCP_IPV6), 5000, 5},
+        {FRAME_ICMP, sizeof(FRAME_ICMP), 6000, 6},
     };
-    fake_capture_backend_set_frames(frames, 5);
+    fake_capture_backend_set_frames(frames, 6);
 
     std::ostringstream out;
     PacketPrinterContext ctx(out);
     int rc = capture_backend_run("fake0", "", "", packet_printer_callback, &ctx);
 
     TEST_ASSERT(rc == 0);
-    TEST_ASSERT(fake_capture_backend_delivered_count() == 5);
+    TEST_ASSERT(fake_capture_backend_delivered_count() == 6);
 
     std::string output = out.str();
     TEST_ASSERT(output.find("[#1] 1000.000001 len=42 02:00:00:00:00:01 > ff:ff:ff:ff:ff:ff "
@@ -103,10 +115,43 @@ void pipeline_decodes_and_prints_each_frame_kind() {
     TEST_ASSERT(output.find("[#5] 5000.000005 len=74 de:ad:be:ef:00:04 > de:ad:be:ef:00:03 "
                             "[TCP] 2001:db8:0:0:0:0:0:1 > 2001:db8:0:0:0:0:0:2 hop=64 "
                             "8080 > 80 seq=1 ack=0 flags=[SYN]") != std::string::npos);
+    TEST_ASSERT(output.find("[#6] 6000.000006 len=42 11:22:33:44:55:66 > aa:bb:cc:dd:ee:ff "
+                            "[ICMP] 10.0.0.1 > 10.0.0.2 ttl=64 echo-request id=1 seq=1") !=
+                std::string::npos);
 
     // Every checksum above was chosen to be correct - none of the
     // well-formed frames should have been flagged as corrupted.
     TEST_ASSERT(output.find("csum=BAD") == std::string::npos);
+}
+
+void display_filter_suppresses_non_matching_packets() {
+    const fake_frame_t frames[] = {
+        {FRAME_TCP, sizeof(FRAME_TCP), 2000, 2},
+        {FRAME_UDP, sizeof(FRAME_UDP), 3000, 3},
+        {FRAME_ICMP, sizeof(FRAME_ICMP), 6000, 6},
+    };
+    fake_capture_backend_set_frames(frames, 3);
+
+    dispfilter_t* filter = dispfilter_compile("tcp.port == 80", nullptr, 0);
+    TEST_ASSERT(filter != nullptr);
+
+    std::ostringstream out;
+    PacketPrinterContext ctx(out);
+    ctx.filter = filter;
+    int rc = capture_backend_run("fake0", "", "", packet_printer_callback, &ctx);
+    dispfilter_free(filter);
+
+    TEST_ASSERT(rc == 0);
+    // All three frames were parsed (and would still be written to a .pcap
+    // file, were one given) - the display filter only decides what gets
+    // printed, unlike the capture filter (-f), which decides what the
+    // pipeline sees at all. See dispfilter.h's header comment.
+    TEST_ASSERT(fake_capture_backend_delivered_count() == 3);
+
+    std::string output = out.str();
+    TEST_ASSERT(output.find("[TCP]") != std::string::npos);
+    TEST_ASSERT(output.find("[UDP]") == std::string::npos);
+    TEST_ASSERT(output.find("[ICMP]") == std::string::npos);
 }
 
 void stop_after_first_frame_cb(const uint8_t* packet, uint32_t length, uint32_t ts_seconds,
@@ -141,6 +186,7 @@ void request_stop_cuts_the_replay_short() {
 int main(void) {
     TEST_RUN(list_devices_reports_the_fake_device);
     TEST_RUN(pipeline_decodes_and_prints_each_frame_kind);
+    TEST_RUN(display_filter_suppresses_non_matching_packets);
     TEST_RUN(request_stop_cuts_the_replay_short);
     TEST_MAIN_END();
 }

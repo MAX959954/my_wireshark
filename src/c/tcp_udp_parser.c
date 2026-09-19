@@ -79,42 +79,13 @@ int udp_parse(const uint8_t* data, uint32_t length, udp_header_t* out_header,
     return 0;
 }
 
-static int verify_with_ipv4_pseudo_header(const uint8_t* segment, uint32_t segment_len,
-                                          const uint8_t src_ip[4], const uint8_t dst_ip[4],
-                                          uint8_t protocol) {
-    uint8_t pseudo_header[12];
-    uint32_t sum;
-
-    pseudo_header[0] = src_ip[0];
-    pseudo_header[1] = src_ip[1];
-    pseudo_header[2] = src_ip[2];
-    pseudo_header[3] = src_ip[3];
-    pseudo_header[4] = dst_ip[0];
-    pseudo_header[5] = dst_ip[1];
-    pseudo_header[6] = dst_ip[2];
-    pseudo_header[7] = dst_ip[3];
-    pseudo_header[8] = 0; /* reserved / zero */
-    pseudo_header[9] = protocol;
-    pseudo_header[10] = (uint8_t)(segment_len >> 8);
-    pseudo_header[11] = (uint8_t)(segment_len & 0xFF);
-
-    sum = checksum_partial(pseudo_header, sizeof(pseudo_header), 0);
-    sum = checksum_partial(segment, segment_len, sum);
-
-    while (sum >> 16) {
-        sum = (sum & 0xFFFF) + (sum >> 16); /* fold the carry, RFC 1071 */
-    }
-
-    return (sum & 0xFFFF) == 0xFFFF;
-}
-
 int tcp_verify_checksum(const uint8_t* segment, uint32_t segment_len, const uint8_t src_ip[4],
                         const uint8_t dst_ip[4]) {
     if (segment == NULL || src_ip == NULL || dst_ip == NULL || segment_len < TCP_HEADER_MIN_LEN) {
         return 0;
     }
 
-    return verify_with_ipv4_pseudo_header(segment, segment_len, src_ip, dst_ip, IPV4_PROTO_TCP);
+    return checksum_verify_ipv4_pseudo(segment, segment_len, src_ip, dst_ip, IPV4_PROTO_TCP);
 }
 
 int udp_verify_checksum(const uint8_t* segment, uint32_t segment_len, const uint8_t src_ip[4],
@@ -133,53 +104,7 @@ int udp_verify_checksum(const uint8_t* segment, uint32_t segment_len, const uint
         return 1;
     }
 
-    return verify_with_ipv4_pseudo_header(segment, segment_len, src_ip, dst_ip, IPV4_PROTO_UDP);
-}
-
-/*
-RFC 2460 section 8.1's IPv6 pseudo-header: 16-byte source, 16-byte
-destination, a 32-bit upper-layer packet length (not 16-bit - IPv6
-segments can in principle exceed 65535 bytes via a jumbogram, so the
-field is sized accordingly even though this analyzer's own capture path
-never sees one), 3 zero bytes, then the 1-byte next-header value:
-
-  +------------------+------------------+
-  |  source address (16 bytes)          |
-  +------------------+------------------+
-  |  destination address (16 bytes)     |
-  +------------------+------------------+
-  |     upper-layer packet length (4)   |
-  +---------+---------+--------+--------+
-  |   zero (3 bytes)  | next header (1) |
-  +---------+---------+--------+--------+
-*/
-static int verify_with_ipv6_pseudo_header(const uint8_t* segment, uint32_t segment_len,
-                                          const uint8_t src_ip[16], const uint8_t dst_ip[16],
-                                          uint8_t next_header) {
-    uint8_t pseudo_header[40];
-    uint32_t sum;
-
-    for (int i = 0; i < 16; i++) {
-        pseudo_header[i] = src_ip[i];
-        pseudo_header[16 + i] = dst_ip[i];
-    }
-    pseudo_header[32] = (uint8_t)(segment_len >> 24);
-    pseudo_header[33] = (uint8_t)(segment_len >> 16);
-    pseudo_header[34] = (uint8_t)(segment_len >> 8);
-    pseudo_header[35] = (uint8_t)(segment_len & 0xFF);
-    pseudo_header[36] = 0;
-    pseudo_header[37] = 0;
-    pseudo_header[38] = 0;
-    pseudo_header[39] = next_header;
-
-    sum = checksum_partial(pseudo_header, sizeof(pseudo_header), 0);
-    sum = checksum_partial(segment, segment_len, sum);
-
-    while (sum >> 16) {
-        sum = (sum & 0xFFFF) + (sum >> 16);
-    }
-
-    return (sum & 0xFFFF) == 0xFFFF;
+    return checksum_verify_ipv4_pseudo(segment, segment_len, src_ip, dst_ip, IPV4_PROTO_UDP);
 }
 
 int tcp_verify_checksum_ipv6(const uint8_t* segment, uint32_t segment_len, const uint8_t src_ip[16],
@@ -188,7 +113,7 @@ int tcp_verify_checksum_ipv6(const uint8_t* segment, uint32_t segment_len, const
         return 0;
     }
 
-    return verify_with_ipv6_pseudo_header(segment, segment_len, src_ip, dst_ip, IPV4_PROTO_TCP);
+    return checksum_verify_ipv6_pseudo(segment, segment_len, src_ip, dst_ip, IPV4_PROTO_TCP);
 }
 
 int udp_verify_checksum_ipv6(const uint8_t* segment, uint32_t segment_len, const uint8_t src_ip[16],
@@ -200,5 +125,5 @@ int udp_verify_checksum_ipv6(const uint8_t* segment, uint32_t segment_len, const
     /* No RFC 768 zero-checksum exemption over IPv6 (RFC 2460 section 8.1)
        - a zero checksum field is run through verification like any other
        and will fail unless it genuinely folds to 0xFFFF. */
-    return verify_with_ipv6_pseudo_header(segment, segment_len, src_ip, dst_ip, IPV4_PROTO_UDP);
+    return checksum_verify_ipv6_pseudo(segment, segment_len, src_ip, dst_ip, IPV4_PROTO_UDP);
 }
