@@ -69,6 +69,23 @@ don't filter.
 struct sock_fprog;
 int raw_socket_attach_filter(raw_socket_ctx_t* ctx, const struct sock_fprog* prog);
 
+/*
+Reads the kernel's own packet/drop counters for this socket
+(SOL_PACKET/PACKET_STATISTICS, struct tpacket_stats_v3 - matching the
+TPACKET_V3 ring mode raw_socket_open() puts the socket into). 'tp_drops'
+is what makes this worth having: it's incremented by the kernel itself
+whenever an incoming frame had nowhere to go because every block in the
+ring was still full (userspace too slow to keep up) - the one number that
+turns "the capture looked fine" into "the capture kept up with the wire,
+verified".
+
+Kernel semantics, not this function's: the counters reset to zero on
+every read, so the values written to 'out_packets' and 'out_drops' are
+deltas since the last call (or since the socket was opened, on the first
+call) - not running totals. Returns 0/-1.
+*/
+int raw_socket_get_stats(raw_socket_ctx_t* ctx, uint32_t* out_packets, uint32_t* out_drops);
+
 /* asks recv to return (called from another thread or a signal handler) */
 void raw_socket_request_stop(raw_socket_ctx_t* ctx);
 

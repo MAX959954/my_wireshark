@@ -23,9 +23,14 @@ so it runs in ordinary `ctest` on every push.
 
 extern int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size);
 
+/* Every fprintf/fclose below is on a path that's already about to return an
+   error code (or, for the final one, exit 0) - there's nothing left to do
+   differently if the write itself fails, so the return values go
+   deliberately unchecked (cert-err33-c). */
+
 int main(int argc, char** argv) {
     if (argc < 2) {
-        fprintf(stderr, "usage: %s <seed-file> [seed-file...]\n", argv[0]);
+        (void)fprintf(stderr, "usage: %s <seed-file> [seed-file...]\n", argv[0]);
         return 1;
     }
 
@@ -37,13 +42,13 @@ int main(int argc, char** argv) {
         }
         if (fseek(f, 0, SEEK_END) != 0) {
             perror("fseek");
-            fclose(f);
+            (void)fclose(f);
             return 1;
         }
         long len = ftell(f);
         if (len < 0 || fseek(f, 0, SEEK_SET) != 0) {
             perror("ftell/fseek");
-            fclose(f);
+            (void)fclose(f);
             return 1;
         }
 
@@ -53,15 +58,15 @@ int main(int argc, char** argv) {
            real libFuzzer run would ever pass. */
         uint8_t* buf = malloc(len > 0 ? (size_t)len : 1);
         if (buf == NULL) {
-            fprintf(stderr, "out of memory\n");
-            fclose(f);
+            (void)fprintf(stderr, "out of memory\n");
+            (void)fclose(f);
             return 1;
         }
 
         size_t n = fread(buf, 1, (size_t)len, f);
-        fclose(f);
+        (void)fclose(f);
         if (n != (size_t)len) {
-            fprintf(stderr, "%s: short read\n", argv[i]);
+            (void)fprintf(stderr, "%s: short read\n", argv[i]);
             free(buf);
             return 1;
         }
@@ -70,6 +75,6 @@ int main(int argc, char** argv) {
         free(buf);
     }
 
-    fprintf(stderr, "replayed %d input(s) OK\n", argc - 1);
+    (void)fprintf(stderr, "replayed %d input(s) OK\n", argc - 1);
     return 0;
 }

@@ -37,8 +37,13 @@ class Packet {
         return ip_.has_value();
     }
 
+    // .value() (throws std::bad_optional_access if !has_ip()) rather than
+    // operator*: a caller that skips the has_ip() check gets a clear
+    // exception instead of undefined behavior. clang-tidy still flags this
+    // as an "unchecked" access since the check itself is the caller's
+    // responsibility (by contract, not by code it can see here).
     const ip_header_t& ip() const {
-        return *ip_;
+        return ip_.value();  // NOLINT(bugprone-unchecked-optional-access)
     }
 
     virtual const char* protocol_name() const noexcept {

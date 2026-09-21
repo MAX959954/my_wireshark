@@ -26,6 +26,15 @@ typedef struct {
 typedef void (*capture_packet_cb)(const uint8_t* packet, uint32_t length, uint32_t ts_seconds,
                                   uint32_t ts_microseconds, void* user_data);
 
+/* Packet/drop counters for the capture that most recently finished (see
+   get_last_stats below) - 'dropped' is the number the kernel itself
+   discarded because userspace couldn't keep up (ring buffer full), not
+   anything this analyzer decided to skip (e.g. a capture filter miss). */
+typedef struct {
+    uint32_t packets_captured;
+    uint32_t packets_dropped;
+} capture_stats_t;
+
 /* The interface itself - a vtable. Each field is a function pointer;
    the struct as a whole is a "table of methods" that different backends
    fill in with different implementations - what C++ generates
@@ -37,6 +46,12 @@ typedef struct {
                capture_packet_cb cb, void* user_data);
 
     void (*request_stop)(void);
+
+    /* Fills '*out' with stats for the run() call that most recently
+       returned. Returns 0 on success, -1 if no run() has completed yet or
+       the backend can't report stats (e.g. fake_capture_backend.c, which
+       has no real kernel counters to read). */
+    int (*get_last_stats)(capture_stats_t* out);
 } capture_backend_t;
 
 const capture_backend_t* capture_backend_get(void);
@@ -46,6 +61,7 @@ int capture_backend_list_devices(capture_device_t* output, int max_devices);
 int capture_backend_run(const char* device_name, const char* bpf_filter,
                         const char* pcap_output_path, capture_packet_cb cb, void* user_data);
 void capture_backend_request_stop(void);
+int capture_backend_get_last_stats(capture_stats_t* out);
 
 #ifdef __cplusplus
 }

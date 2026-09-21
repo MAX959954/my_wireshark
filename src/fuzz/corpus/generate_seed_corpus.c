@@ -19,9 +19,10 @@ static void write_file(const char* path, const uint8_t* data, size_t len) {
         return;
     }
     if (len > 0) {
-        fwrite(data, 1, len, f);
+        (void)fwrite(data, 1, len,
+                     f);  // one-off dev tool - a failed write here is obvious at a glance
     }
-    fclose(f);
+    (void)fclose(f);
     printf("wrote %s (%zu bytes)\n", path, len);
 }
 

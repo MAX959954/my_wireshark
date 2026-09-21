@@ -55,10 +55,19 @@ static void fake_request_stop(void) {
     g_stop_requested = 1;
 }
 
+/* No real kernel/socket behind this backend, so there are no drop counters
+   to report - matches capture_backend_t's "-1 if the backend can't report
+   stats" contract. */
+static int fake_get_last_stats(capture_stats_t* out) {
+    (void)out;
+    return -1;
+}
+
 static const capture_backend_t g_fake_backend = {
     .list_devices = fake_list_devices,
     .run = fake_run,
     .request_stop = fake_request_stop,
+    .get_last_stats = fake_get_last_stats,
 };
 
 const capture_backend_t* capture_backend_get(void) {
@@ -76,4 +85,8 @@ int capture_backend_run(const char* device_name, const char* bpf_filter,
 
 void capture_backend_request_stop(void) {
     capture_backend_get()->request_stop();
+}
+
+int capture_backend_get_last_stats(capture_stats_t* out) {
+    return capture_backend_get()->get_last_stats(out);
 }

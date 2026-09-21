@@ -75,7 +75,10 @@ static void cf_fail(cf_ctx_t* c, const char* msg) {
     }
     c->failed = 1;
     if (c->err != NULL && c->err_len > 0) {
-        snprintf(c->err, (size_t)c->err_len, "%s", msg);
+        /* best-effort: a truncated error message is still more useful than
+           none, so the (unlikely) truncation return value isn't worth
+           checking - see cert-err33-c. */
+        (void)snprintf(c->err, (size_t)c->err_len, "%s", msg);
     }
 }
 
@@ -85,7 +88,7 @@ static void cf_failf(cf_ctx_t* c, const char* fmt, const char* arg) {
     }
     c->failed = 1;
     if (c->err != NULL && c->err_len > 0) {
-        snprintf(c->err, (size_t)c->err_len, fmt, arg);
+        (void)snprintf(c->err, (size_t)c->err_len, fmt, arg);
     }
 }
 
@@ -108,7 +111,12 @@ static int parse_ipv4_word(const char* word, int len, uint8_t out[4]) {
     int digits = 0;
 
     for (int i = 0; i <= len; i++) {
-        char ch = (i < len) ? word[i] : '.'; /* a virtual trailing dot simplifies the loop */
+        /* explicit cast: the ternary's common type is 'int' (integer
+           promotion), and the value always fits back into 'char' - but
+           spelling that out avoids relying on an implementation-defined
+           conversion (bugprone-narrowing-conversions). */
+        char ch =
+            (char)((i < len) ? word[i] : '.'); /* a virtual trailing dot simplifies the loop */
         if (ch == '.') {
             if (digits == 0 || value > 255 || octet > 3) {
                 return -1;

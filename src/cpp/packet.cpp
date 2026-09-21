@@ -26,12 +26,13 @@ void Packet::print(std::ostream& os) const {
     os << " [" << protocol_name() << "]";
 
     if (has_ip()) {
+        const ip_header_t& hdr = ip();
         char src_ip[IP_ADDR_STR_LEN];
         char dst_ip[IP_ADDR_STR_LEN];
-        ip_addr_to_str(ip_->src_addr, src_ip);
-        ip_addr_to_str(ip_->dst_addr, dst_ip);
-        os << " " << src_ip << " > " << dst_ip << " ttl=" << static_cast<int>(ip_->ttl);
-        if (!ip_->checksum_valid) {
+        ip_addr_to_str(hdr.src_addr, src_ip);
+        ip_addr_to_str(hdr.dst_addr, dst_ip);
+        os << " " << src_ip << " > " << dst_ip << " ttl=" << static_cast<int>(hdr.ttl);
+        if (!hdr.checksum_valid) {
             os << " ip_csum=BAD";
         }
     }

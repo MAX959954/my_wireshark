@@ -37,10 +37,20 @@ raw_socket_ctx_t, so it's kept in a file-scope static instead.
    every access to go through memory. */
 static raw_socket_ctx_t* volatile g_active_ctx = NULL;
 
+/* Populated at the end of run_impl(), while the socket is still open -
+   see get_last_stats_impl(). */
+static capture_stats_t g_last_stats;
+static int g_last_stats_valid = 0;
+
 static void request_stop_impl(void) {
     raw_socket_ctx_t* ctx = g_active_ctx;
     if (ctx != NULL) {
-        raw_socket_request_stop(ctx); /* async-signal-safe: only does an atomic_store */
+        // async-signal-safe: only does an atomic_store (raw_socket.c) -
+        // clang-tidy can't see that across the raw_socket.c/.h boundary, so
+        // it conservatively flags the call as "unverifiable" rather than
+        // actually unsafe.
+        // NOLINTNEXTLINE(bugprone-signal-handler,cert-msc54-cpp,cert-sig30-c)
+        raw_socket_request_stop(ctx);
     }
 }
 
@@ -108,7 +118,7 @@ static int run_impl(const char* device_name, const char* bpf_filter, const char*
     if (bpf_filter != NULL && bpf_filter[0] != 0) {
         char err[128];
         if (capfilter_compile(bpf_filter, &filter_prog, err, sizeof(err)) != 0) {
-            fprintf(stderr, "error: invalid filter expression \"%s\": %s\n", bpf_filter, err);
+            (void)fprintf(stderr, "error: invalid filter expression \"%s\": %s\n", bpf_filter, err);
             return -1;
         }
     }
@@ -141,7 +151,9 @@ static int run_impl(const char* device_name, const char* bpf_filter, const char*
         }
         if (write_pcap_global_header(pcap_file) != 0) {
             perror("fwrite");
-            fclose(pcap_file);
+            /* already returning -1 for the write failure above; a second
+               error here wouldn't change the outcome (cert-err33-c). */
+            (void)fclose(pcap_file);
             raw_socket_close(ctx);
             return -1;
         }
@@ -195,7 +207,10 @@ static int run_impl(const char* device_name, const char* bpf_filter, const char*
         cb(buf, (uint32_t)n, ts_seconds, ts_microseconds, user_data);
     }
 
-    signal(SIGINT, previous_sigint_handler);
+    /* restoring the previous handler - its own former return value (the
+       handler before that) was never needed and isn't now either
+       (cert-err33-c). */
+    (void)signal(SIGINT, previous_sigint_handler);
     g_active_ctx = NULL;
 
     if (pcap_file != NULL) {
@@ -206,14 +221,39 @@ static int run_impl(const char* device_name, const char* bpf_filter, const char*
             result = -1;
         }
     }
+
+    /* Must happen before raw_socket_close() - the kernel-side counters
+       live on the socket, which close() tears down. A single read at the
+       end gives totals for the whole run (see raw_socket_get_stats()'s
+       "resets on every read" note): this is the first read on this
+       socket, so nothing has been discarded from the count yet. */
+    uint32_t packets = 0;
+    uint32_t drops = 0;
+    if (raw_socket_get_stats(ctx, &packets, &drops) == 0) {
+        g_last_stats.packets_captured = packets;
+        g_last_stats.packets_dropped = drops;
+        g_last_stats_valid = 1;
+    } else {
+        g_last_stats_valid = 0;
+    }
+
     raw_socket_close(ctx);
     return result;
+}
+
+static int get_last_stats_impl(capture_stats_t* out) {
+    if (out == NULL || !g_last_stats_valid) {
+        return -1;
+    }
+    *out = g_last_stats;
+    return 0;
 }
 
 static const capture_backend_t g_linux_backend = {
     .list_devices = list_devices_impl,
     .run = run_impl,
     .request_stop = request_stop_impl,
+    .get_last_stats = get_last_stats_impl,
 };
 
 const capture_backend_t* capture_backend_get(void) {
@@ -231,4 +271,8 @@ int capture_backend_run(const char* device_name, const char* bpf_filter,
 
 void capture_backend_request_stop(void) {
     capture_backend_get()->request_stop();
+}
+
+int capture_backend_get_last_stats(capture_stats_t* out) {
+    return capture_backend_get()->get_last_stats(out);
 }

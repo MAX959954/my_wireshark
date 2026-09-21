@@ -245,7 +245,10 @@ void print_packet(std::ostream& os, const uint8_t* packet, uint32_t length, uint
         default: {
             Packet pkt(ts_seconds, ts_microseconds, length, eth, ip);
             char suffix[32];
-            std::snprintf(suffix, sizeof(suffix), " proto=%d", static_cast<int>(ip.protocol));
+            // sized well beyond " proto=255" (ip.protocol is a uint8_t), so
+            // this can never truncate - the return value isn't worth
+            // checking (cert-err33-c).
+            (void)std::snprintf(suffix, sizeof(suffix), " proto=%d", static_cast<int>(ip.protocol));
             finish(pkt, suffix);
             break;
         }
