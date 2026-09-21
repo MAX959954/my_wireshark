@@ -1,0 +1,23 @@
+---
+# Static analysis on top of -Wall -Wextra -Werror (see CI). bugprone-*/cert-*
+# target exactly the kind of mistakes a compiler warning won't catch but
+# raw-byte network parsing is full of: signed/unsigned mixups at buffer
+# boundaries, suspicious casts, integer overflow, sizeof-on-the-wrong-thing.
+#
+# A handful of cert-* checks are pure naming/style conventions unrelated to
+# correctness (e.g. requiring specific identifier casing) and would just add
+# noise on top of this project's own established style (clang-format +
+# existing naming) - those are disabled below rather than left to generate
+# findings nobody intends to act on.
+Checks: >
+  -*,
+  bugprone-*,
+  cert-*,
+  -bugprone-easily-swappable-parameters,
+  -cert-dcl37-c,
+  -cert-dcl51-cpp,
+  -cert-err58-cpp
+
+WarningsAsErrors: ''
+HeaderFilterRegex: 'src/(c|cpp)/.*\.h$'
+FormatStyle: none

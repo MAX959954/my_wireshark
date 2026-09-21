@@ -66,9 +66,15 @@ per packet — a minimal, educational take on what tools like Wireshark and tcpd
   against the *decoded fields* (`tcp.port`, `ip.src`, `ipv6.addr`, ...) rather than byte offsets —
   see [Display filters vs. capture filters](#display-filters-vs-capture-filters) below for how this
   differs from `-f`.
+- **Capture statistics**: on exit, prints packets captured/dropped and average packets/sec straight
+  from the kernel's own `TPACKET_V3` ring-buffer counters (`PACKET_STATISTICS`) — see [Capture
+  statistics](#capture-statistics) below.
 - **Fuzz-tested parsers** (`src/fuzz/`): every protocol parser has a libFuzzer-compatible harness and a
   seed corpus, replayed under ASan/UBSan on every push and fuzzed for real with libFuzzer in CI — see
   [Fuzzing](#fuzzing) below.
+- **Two layers of static analysis in CI**: `-Wall -Wextra -Werror` on every build, plus a separate
+  `clang-tidy` job (`bugprone-*`/`cert-*`) that catches the kind of mistake a compiler warning doesn't
+  — see [Static analysis](#static-analysis) below.
 
 ## Project layout
 
@@ -203,6 +209,29 @@ not a substitute for the kernel's own ring buffer (which remains the last line o
 genuine sustained overload). `src/tests/test_packet_queue.cpp` exercises the actual blocking/wakeup
 behavior with real `std::thread`s, and the whole test suite passes clean under ThreadSanitizer.
 
+## Capture statistics
+
+`TPACKET_V3` (see [Live capture](#features) above) isn't just faster than one-`recv()`-per-packet -
+the kernel also keeps its own counters for the ring buffer backing it, readable via
+`getsockopt(SOL_PACKET, PACKET_STATISTICS)` (`raw_socket_get_stats()` in `src/c/raw_socket.c`):
+
+- `tp_packets` - frames the kernel delivered into the ring for this socket.
+- `tp_drops` - frames the kernel had to discard because every block in the ring was still full when
+  they arrived, i.e. **this process couldn't keep up with the wire**. This is the number that turns
+  "the capture looked fine" into "the capture kept up, measured" - a capture filter miss or a display
+  filter mismatch never shows up here, only packets the kernel itself gave up on delivering.
+
+`main.cpp` reads these once, right before the socket closes (the kernel resets them on every read, so
+a single read at the end gives totals for the whole run), and prints a summary to stderr on exit:
+
+```
+[stats] captured=48213 dropped=0 (0.0%) elapsed=12.4s avg=3888.9 pps
+```
+
+A run with drops during a heavy burst looks like `dropped=142 (0.3%)` instead - a concrete signal to
+either apply a tighter capture filter (`-f`) or grow the ring (`RS_RING_BLOCK_NR`/`RS_RING_BLOCK_SIZE`
+in `raw_socket.c`), rather than just a vague feeling that packets might be missing.
+
 ## Fuzzing
 
 Every parser gets a `LLVMFuzzerTestOneInput` harness in `src/fuzz/` (`fuzz_eth.c`, `fuzz_arp.c`,
@@ -231,6 +260,24 @@ Seed corpora (`src/fuzz/corpus/`) are small hand-built valid/near-valid frames (
 `generate_seed_corpus.c` in that directory) rather than empty — mutating from a header that already
 passes the length/version checks reaches far more code than mutating from nothing.
 
+## Static analysis
+
+`-Wall -Wextra -Werror` (the `warnings-as-errors` CI matrix entry) catches a lot, but a compiler
+warning is fundamentally about "is this code well-formed", not "is this code safe" - and this project
+is, at its core, raw-byte parsing over untrusted network input, exactly the domain where the
+difference matters. A separate CI job (`clang-tidy`) runs [clang-tidy](https://clang.llvm.org/extra/clang-tidy/)
+with the `bugprone-*` and `cert-*` check families (see `.clang-tidy` for the exact list and
+`compile_commands.json`-based setup) over every `.c`/`.cpp` file in `src/`, `--warnings-as-errors`, so
+a new finding fails CI the same way a compiler warning would.
+
+A few of these checks flag patterns that are safe *by design* in this codebase rather than bugs -
+e.g. `bugprone-unchecked-optional-access` on `Packet::ip()` (RFC: callers must check `has_ip()`
+first — the contract lives in the header comment, not in code the checker can see across a call
+boundary) or `bugprone-signal-handler` on the `SIGINT` handler calling into `raw_socket.c` (it only
+does an atomic store, but that's defined in a different translation unit than the one being
+analyzed). Each of those is a single `NOLINT` comment *at the exact line*, with a comment explaining
+why - not a blanket suppression, so the check keeps working everywhere else.
+
 ## Usage
 
 Run the built executable as root, or grant the binary `CAP_NET_RAW` directly
@@ -247,7 +294,8 @@ for an optional capture filter (`-f`, BPF) and display filter (`-Y`, parsed-fiel
 [Display filters vs. capture filters](#display-filters-vs-capture-filters). Captured packets are
 decoded on a separate thread from capture itself (see [Multithreaded
 pipeline](#multithreaded-pipeline)) and printed to stdout in real time until you stop the capture with
-`Ctrl+C`.
+`Ctrl+C`, at which point a capture summary (see [Capture statistics](#capture-statistics)) is printed
+to stderr.
 
 ## License
 

@@ -70,7 +70,10 @@ static void df_fail(df_ctx_t* c, const char* msg) {
     }
     c->failed = 1;
     if (c->err != NULL && c->err_len > 0) {
-        snprintf(c->err, (size_t)c->err_len, "%s", msg);
+        /* best-effort: a truncated error message is still more useful than
+           none, so the (unlikely) truncation return value isn't worth
+           checking - see cert-err33-c. */
+        (void)snprintf(c->err, (size_t)c->err_len, "%s", msg);
     }
 }
 
@@ -80,7 +83,7 @@ static void df_failf(df_ctx_t* c, const char* fmt, const char* arg) {
     }
     c->failed = 1;
     if (c->err != NULL && c->err_len > 0) {
-        snprintf(c->err, (size_t)c->err_len, fmt, arg);
+        (void)snprintf(c->err, (size_t)c->err_len, fmt, arg);
     }
 }
 
@@ -127,7 +130,12 @@ static int parse_ipv4_word(const char* word, int len, uint8_t out[4]) {
     int digits = 0;
 
     for (int i = 0; i <= len; i++) {
-        char ch = (i < len) ? word[i] : '.'; /* a virtual trailing dot simplifies the loop */
+        /* explicit cast: the ternary's common type is 'int' (integer
+           promotion), and the value always fits back into 'char' - but
+           spelling that out avoids relying on an implementation-defined
+           conversion (bugprone-narrowing-conversions). */
+        char ch =
+            (char)((i < len) ? word[i] : '.'); /* a virtual trailing dot simplifies the loop */
         if (ch == '.') {
             if (digits == 0 || value > 255 || octet > 3) {
                 return -1;
@@ -248,7 +256,9 @@ static int parse_ipv6_word(const char* word, int len, uint8_t out[16]) {
     }
 
     int n_zero = 8 - total;
-    int idx = 0;
+    size_t idx = 0; /* size_t, not int: idx*2 indexes 'out' directly, so this
+                        avoids an int multiplication implicitly widening to a
+                        pointer offset (bugprone-implicit-widening-of-multiplication-result) */
     for (int i = 0; i < n_left; i++) {
         out[idx * 2] = (uint8_t)(left[i] >> 8);
         out[idx * 2 + 1] = (uint8_t)(left[i] & 0xFF);
@@ -721,7 +731,7 @@ dispfilter_t* dispfilter_compile(const char* expr, char* err, int err_len) {
     dispfilter_t* filter = malloc(sizeof(dispfilter_t));
     if (filter == NULL) {
         if (err != NULL && err_len > 0) {
-            snprintf(err, (size_t)err_len, "out of memory compiling filter");
+            (void)snprintf(err, (size_t)err_len, "out of memory compiling filter");
         }
         return NULL;
     }
@@ -729,7 +739,7 @@ dispfilter_t* dispfilter_compile(const char* expr, char* err, int err_len) {
     if (filter->nodes == NULL) {
         free(filter);
         if (err != NULL && err_len > 0) {
-            snprintf(err, (size_t)err_len, "out of memory compiling filter");
+            (void)snprintf(err, (size_t)err_len, "out of memory compiling filter");
         }
         return NULL;
     }

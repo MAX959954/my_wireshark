@@ -44,7 +44,7 @@ static int accepts(const char* expr, const uint8_t* pkt, uint32_t len) {
     int rc = capfilter_compile(expr, &prog, err, sizeof(err));
     TEST_ASSERT(rc == 0);
     if (rc != 0) {
-        fprintf(stderr, "  compile error for '%s': %s\n", expr, err);
+        (void)fprintf(stderr, "  compile error for '%s': %s\n", expr, err);
         return 0;
     }
     uint32_t verdict = bpf_interp_run(&prog, pkt, len);

@@ -76,6 +76,14 @@ const uint8_t FRAME_ICMP[] = {
     0,    1,    10,   0,    0,    2,    0x08, 0x00, 0xf7, 0xfd, 0x00, 0x01, 0x00, 0x01,
 };
 
+void get_last_stats_is_unsupported_on_the_fake_backend() {
+    // fake_capture_backend.c has no real kernel counters to read - proves
+    // the vtable's "-1 if the backend can't report stats" contract holds
+    // rather than, say, leaving 'stats' uninitialized and reporting junk.
+    capture_stats_t stats;
+    TEST_ASSERT(capture_backend_get_last_stats(&stats) == -1);
+}
+
 void list_devices_reports_the_fake_device() {
     capture_device_t devices[CAPTURE_MAX_DEVICES];
     int count = capture_backend_list_devices(devices, CAPTURE_MAX_DEVICES);
@@ -184,6 +192,7 @@ void request_stop_cuts_the_replay_short() {
 }  // namespace
 
 int main(void) {
+    TEST_RUN(get_last_stats_is_unsupported_on_the_fake_backend);
     TEST_RUN(list_devices_reports_the_fake_device);
     TEST_RUN(pipeline_decodes_and_prints_each_frame_kind);
     TEST_RUN(display_filter_suppresses_non_matching_packets);

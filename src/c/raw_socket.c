@@ -313,6 +313,23 @@ int raw_socket_recv(raw_socket_ctx_t* ctx, uint8_t* buf, uint32_t buf_len, uint3
     }
 }
 
+int raw_socket_get_stats(raw_socket_ctx_t* ctx, uint32_t* out_packets, uint32_t* out_drops) {
+    if (ctx == NULL || out_packets == NULL || out_drops == NULL) {
+        return -1;
+    }
+
+    struct tpacket_stats_v3 stats;
+    socklen_t len = sizeof(stats);
+    if (getsockopt(ctx->fd, SOL_PACKET, PACKET_STATISTICS, &stats, &len) == -1) {
+        perror("getsockopt(PACKET_STATISTICS)");
+        return -1;
+    }
+
+    *out_packets = stats.tp_packets;
+    *out_drops = stats.tp_drops;
+    return 0;
+}
+
 int raw_socket_attach_filter(raw_socket_ctx_t* ctx, const struct sock_fprog* prog) {
     if (ctx == NULL || prog == NULL) {
         return -1;

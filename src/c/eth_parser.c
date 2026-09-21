@@ -45,6 +45,8 @@ int eth_parse(const uint8_t* data, uint32_t length, eth_header_t* out_header,
 }
 
 void eth_mac_to_str(const uint8_t mac[ETH_ADDR_LEN], char* output) {
-    snprintf(output, ETH_MAC_STR_LEN, "%02x:%02x:%02x:%02x:%02x:%02x", mac[0], mac[1], mac[2],
-             mac[3], mac[4], mac[5]);
+    /* ETH_MAC_STR_LEN is sized exactly for this format string, so this can
+       never truncate - the return value isn't worth checking (cert-err33-c). */
+    (void)snprintf(output, ETH_MAC_STR_LEN, "%02x:%02x:%02x:%02x:%02x:%02x", mac[0], mac[1], mac[2],
+                   mac[3], mac[4], mac[5]);
 }

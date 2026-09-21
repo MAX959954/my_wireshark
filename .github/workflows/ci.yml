@@ -57,6 +57,30 @@ jobs:
           UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
         run: ctest --output-on-failure
 
+  # A second, independent layer of static analysis on top of the
+  # -Wall -Wextra -Werror above: clang-tidy's bugprone-*/cert-* checks catch
+  # things a compiler warning doesn't (see .clang-tidy for the exact check
+  # list and why a couple of purely stylistic cert-* checks are excluded).
+  # Separate job because it needs its own toolchain (clang-tidy) and a
+  # compile_commands.json, not the warnings-as-errors/ASan matrix above.
+  clang-tidy:
+    name: clang-tidy (bugprone-*, cert-*)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install clang-tidy
+        run: sudo apt-get update && sudo apt-get install -y clang-tidy
+
+      - name: Configure (compile_commands.json)
+        run: cmake -S . -B build -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+
+      - name: Run clang-tidy
+        run: |
+          set -e
+          files=$(find src/c src/cpp src/tests src/fuzz -name '*.c' -o -name '*.cpp')
+          clang-tidy -p build --warnings-as-errors='*' $files src/main.cpp
+
   # Runs the real libFuzzer binaries (src/fuzz/), not just the seed-corpus
   # replay that build-and-test above already covers via ctest. This is a
   # bounded fuzzing *session*, not just a replay: -max_total_time actually

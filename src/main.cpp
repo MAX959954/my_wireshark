@@ -3,7 +3,9 @@
 #include "cpp/packet_printer.h"
 #include "cpp/packet_queue.h"
 
+#include <chrono>
 #include <cstdint>
+#include <iomanip>
 #include <iostream>
 #include <string>
 #include <thread>
@@ -120,6 +122,7 @@ int main(int argc, char** argv) {
     ctx.filter = filter;
 
     int capture_result = 0;
+    auto start_time = std::chrono::steady_clock::now();
     std::thread capture_thread([&]() {
         capture_result = capture_backend_run(device_name.c_str(), capture_filter.c_str(),
                                              pcap_path.c_str(), queue_push_callback, &queue);
@@ -133,6 +136,27 @@ int main(int argc, char** argv) {
     }
 
     capture_thread.join();
+    double elapsed_seconds =
+        std::chrono::duration<double>(std::chrono::steady_clock::now() - start_time).count();
+
+    // tp_packets/tp_drops (see raw_socket_get_stats()) come straight from the
+    // kernel's own TPACKET_V3 ring-buffer counters - unlike the packet count
+    // this process printed itself, 'packets_dropped' reflects frames the
+    // kernel discarded because the ring was still full when they arrived
+    // (userspace too slow to keep up), independently of anything a capture
+    // or display filter chose to skip.
+    capture_stats_t stats;
+    if (capture_backend_get_last_stats(&stats) == 0) {
+        uint64_t offered = (uint64_t)stats.packets_captured + stats.packets_dropped;
+        double drop_pct = offered > 0 ? (100.0 * stats.packets_dropped) / (double)offered : 0.0;
+        double pps = elapsed_seconds > 0.0 ? stats.packets_captured / elapsed_seconds : 0.0;
+
+        std::cerr << std::fixed << std::setprecision(1)
+                  << "\n[stats] captured=" << stats.packets_captured
+                  << " dropped=" << stats.packets_dropped << " (" << drop_pct
+                  << "%) elapsed=" << elapsed_seconds << "s avg=" << pps << " pps\n";
+    }
+
     dispfilter_free(filter);
 
     if (capture_result != 0) {

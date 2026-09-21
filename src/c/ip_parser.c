@@ -80,5 +80,7 @@ int ip_parse(const uint8_t* data, uint32_t length, ip_header_t* out_header,
 }
 
 void ip_addr_to_str(const uint8_t addr[IP_ADDR_LEN], char* output) {
-    snprintf(output, IP_ADDR_STR_LEN, "%u.%u.%u.%u", addr[0], addr[1], addr[2], addr[3]);
+    /* IP_ADDR_STR_LEN is sized exactly for this format string, so this can
+       never truncate - the return value isn't worth checking (cert-err33-c). */
+    (void)snprintf(output, IP_ADDR_STR_LEN, "%u.%u.%u.%u", addr[0], addr[1], addr[2], addr[3]);
 }
